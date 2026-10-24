@@ -261,8 +261,8 @@ function TopBar({ query, onQueryChange, onNavigate, onAIOpen }) {
             </form>
             <div className="topbar-actions flex items-center gap-2.5 max-sm:gap-1.5">
               <ThemeToggle />
-              <button className="ai-topbar-btn flex items-center gap-1.5 h-[38px] px-4 border-0 rounded-full text-white bg-gradient-to-br from-blue to-[#6c5ce7] text-[13px] font-bold shadow-sm transition-all duration-150 hover:-translate-y-px hover:shadow-md" onClick={onAIOpen} type="button" aria-label="树洞 AI">
-                <Icon name="smart_toy" filled />
+              <button className="ai-topbar-btn" onClick={onAIOpen} type="button" aria-label="树洞 AI">
+                <Icon name="smart_toy" />
                 <span>树洞 AI</span>
               </button>
               <div className="notif-wrapper relative">

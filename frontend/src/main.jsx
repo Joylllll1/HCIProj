@@ -14,7 +14,6 @@ const isPreview = import.meta.env.DEV && new URLSearchParams(window.location.sea
 function renderApp() {
   createRoot(document.getElementById('root')).render(
     <React.StrictMode>
-      {isPreview && <div className="preview-banner">课程演示 · 示例数据，刷新后重置 <a href="/">返回正式入口</a></div>}
       <App />
     </React.StrictMode>,
   );

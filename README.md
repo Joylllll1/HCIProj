@@ -18,41 +18,45 @@
 
 ## 这是什么
 
-一套前后端分离的校园社区系统。它真正想处理的不是“匿名发帖”这个功能，而是校园场景里低压力表达和内容治理之间的矛盾：对普通用户保持半匿名，对管理员保留可追溯的处置手段。
+基于 React、Express 和 MongoDB 的校园半匿名社区。普通用户以匿名身份交流，管理员可以处理举报、管理内容，并在授权范围内追溯违规行为。
 
-仓库已经跑通完整主链路——注册登录、匿名发帖、评论回复、点赞收藏、通知中心、校园公告与活动、带工具调用的 AI 助手，以及管理后台。当前版本同时是人机交互课程的界面改版作业，交互与主题的设计说明见 [前端改版说明](docs/frontend-redesign.md)。
+项目包含注册登录、匿名发帖、评论回复、点赞收藏、通知中心、校园公告与活动、带工具调用的 AI 助手，以及管理后台。当前版本同时用于人机交互课程的界面改版作业，交互与主题的设计说明见 [前端改版说明](docs/frontend-redesign.md)。
 
-先划清边界：这是课程项目，不是生产级匿名社交产品。页面里的内容都是虚构的演示数据；图片存储、限流、CSRF 防护等仍属于明确的待办项，见 [已知限制](#已知限制)。
+正常运行时，前端通过 `/api` 连接后端，账号、帖子、评论和图片等数据保存在 MongoDB 中。仓库另提供不连接后端的前端预览模式（`?preview=1`），供快速查看界面；该模式使用虚构的临时数据，不代表正常运行时的数据来源。
 
 ## 界面预览
 
-<p align="center">
-  <img src="docs/images/home-desktop.png" width="620" alt="桌面端动态首页：侧栏、就地发布与信息流">
-  <img src="docs/images/home-mobile.png" width="200" alt="移动端首页：底部导航与主题切换">
-</p>
-
-<p align="center">
-  <img src="docs/images/thread-dark.png" width="640" alt="深色主题下的帖子详情、评论区与话题筛选">
-</p>
-
-<p align="center"><sub>桌面信息流 · 移动端布局 · 深色主题与评论区</sub></p>
+<table>
+  <tr>
+    <th align="left">桌面信息流</th>
+    <th align="left">移动端布局</th>
+  </tr>
+  <tr>
+    <td valign="top"><img src="docs/images/home-desktop.png" width="608" alt="桌面端动态首页：侧栏、就地发布与信息流"></td>
+    <td valign="top"><img src="docs/images/home-mobile.png" width="190" alt="移动端首页：底部导航与主题切换"></td>
+  </tr>
+  <tr>
+    <th colspan="2" align="left">深色主题与评论区</th>
+  </tr>
+  <tr>
+    <td colspan="2"><img src="docs/images/thread-dark.png" width="825" alt="深色主题下的帖子详情、评论区与话题筛选"></td>
+  </tr>
+</table>
 
 ## 快速开始
 
-### 方式一：只看前端，不需要后端
+### 方式一：运行完整项目（前端 + 后端）
+
+前置依赖：Node.js ≥ 18、npm、MongoDB（本地或远程实例）。
+
+先获取仓库：
 
 ```bash
 git clone https://github.com/Joylllll1/HCIProj.git
-cd HCIProj/frontend
-npm ci
-npm run dev:demo
+cd HCIProj
 ```
 
-浏览器会自动打开 `http://127.0.0.1:5173/?preview=1`（没自动打开就手动访问）。演示数据只存在当前页面内存里，刷新即重置；未支持的操作会提示改用正式入口。演示代码只在 Vite 开发模式加载，不会打进生产构建。
-
-### 方式二：完整跑通前后端
-
-前置依赖：Node.js ≥ 18、npm、MongoDB（本地或远程实例）。
+以下三个终端均从仓库根目录开始：
 
 ```bash
 # 1. 后端
@@ -87,6 +91,17 @@ npm run dev               # http://localhost:5173
 | 普通用户 | `test@nju.edu.cn` | `12345678` |
 
 > 没有配置 SMTP 时，邮箱验证码不会真正发送，而是打印在后端控制台日志里，仅适合本地调试。
+
+### 方式二：仅预览前端界面（不连接后端）
+
+```bash
+git clone https://github.com/Joylllll1/HCIProj.git
+cd HCIProj/frontend
+npm ci
+npm run dev:demo
+```
+
+浏览器会自动打开 `http://127.0.0.1:5173/?preview=1`（没自动打开就手动访问）。演示数据只存在当前页面内存里，刷新即重置；未支持的操作会提示改用正式入口。演示代码只在 Vite 开发模式加载，不会打进生产构建。
 
 ## 功能一览
 
@@ -192,9 +207,10 @@ GitHub Actions 会在推送到 `main` / `master` 或提交 PR 时，分别对前
 
 ## 已知限制
 
-- 图片以内联 base64 Data URL 传输，列表接口偏重，存储治理尚未开始
+- 图片已经随内容以内联 base64 Data URL 保存在 MongoDB 中，尚未接入独立文件或对象存储，列表接口体积较大
 - 通知中心不是纯 SSE 推送，依赖前端刷新 + 轮询兜底
-- 安全面仍有缺口：验证码限流与爆破防护、上传额度与资源清理、更严格的 CORS / 安全头 / CSRF 方案
+- 验证码与登录等接口尚未接入统一限流和错误次数限制；图片已有大小和数量校验，用户级上传配额与资源清理仍待补充
+- 登录 Cookie 已使用 HttpOnly 和 SameSite（默认 lax）；当前 CORS 回显请求来源，尚未实现独立的 CSRF token 校验与统一安全响应头策略
 - 前端尚未迁移到 React Router
 
 更细的待办见 [docs/wiki/todo.md](docs/wiki/todo.md)。
@@ -234,4 +250,4 @@ cookie 需要额外的跨域配置。推荐让两者同源，生产环境用反�
 
 本仓库是南京大学人机交互课程的课程作业，用于演示与评审设计取舍。界面设计参考了 [Treehole Art](https://arthals.ink/blog/treehole-art) 的交互思路（内容优先的信息流、就地发布、克制的配色），没有复制其代码或品牌素材。
 
-演示数据均为虚构，不包含真实用户信息。仓库暂未附开源许可证；如需复用代码，请先联系作者。
+README 截图、前端预览模式和入口页互动示例中的内容为虚构示例；正常运行时，社区内容由后端数据库提供。仓库暂未附开源许可证；如需复用代码，请先联系作者。

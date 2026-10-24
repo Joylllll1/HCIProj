@@ -39,9 +39,9 @@
 .search-submit { height: 100%; padding: 0 18px; border: 0; border-left: 1px solid var(--color-line); border-radius: 0 6px 6px 0; background: transparent; color: var(--color-text-2); font-size: 12px; white-space: nowrap; }
 .search-submit:hover { background: var(--color-blue-soft); color: var(--color-blue); }
 .topbar-actions { flex: none; gap: 12px; }
-.ai-topbar-btn { height: 36px; padding: 0 12px; gap: 6px; background: var(--color-blue-soft); border-radius: 7px; color: var(--color-blue); font-size: 12px; font-weight: 600; box-shadow: none; }
-.ai-topbar-btn:hover { transform: none; translate: none; box-shadow: none; background: var(--color-surface-tint); }
-.ai-topbar-btn .app-icon { width: 17px; height: 17px; }
+.ai-topbar-btn { display: inline-flex; align-items: center; justify-content: center; flex: none; height: 36px; padding: 0 8px; gap: 6px; border: 0; border-radius: 7px; background: transparent; color: var(--color-text-2); font: inherit; font-size: 12px; font-weight: 500; line-height: 1.5; white-space: nowrap; cursor: pointer; transition: background-color 150ms ease, color 150ms ease; }
+.ai-topbar-btn:hover { background: var(--color-surface-soft); color: var(--color-blue); }
+.ai-topbar-btn .app-icon { width: 18px; height: 18px; stroke-width: 1.6; }
 .icon-button { width: 36px; height: 36px; border: 0; border-radius: 7px; box-shadow: none; background: transparent; }
 .icon-button:hover { transform: none; translate: none; background: var(--color-surface-soft); }
 .mobile-brand { display: none; }
@@ -224,13 +224,6 @@
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }
-
-.preview-banner { display: flex; justify-content: center; align-items: center; flex-wrap: wrap; gap: 8px 18px; min-height: 30px; padding: 6px 12px; background: var(--color-blue-soft); color: var(--color-blue); font-size: 11px; }
-.preview-banner a { text-decoration: underline; text-underline-offset: 3px; }
-.preview-banner { position: sticky; top: 0; z-index: 50; height: 30px; }
-.preview-banner + .app-shell .sidebar { height: calc(100dvh - 30px); top: 30px; }
-.preview-banner + .app-shell { min-height: calc(100dvh - 30px); }
-.preview-banner + .app-shell .topbar { top: 30px; }
 
 /* The public welcome screen uses the same reading surfaces as the app. */
 .welcome-page { max-width: 1160px; margin-inline: auto; padding: 0 40px; }
@@ -701,9 +694,6 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .admin-topbar { height: 74px; gap: 14px; background: var(--color-surface); backdrop-filter: none; }
 .admin-topbar-caption { margin-right: auto; font-size: 13px; color: var(--color-text-2); }
 .admin-shell .nav-item > span.absolute { display: none; }
-.preview-banner + .admin-shell .sidebar { height: calc(100dvh - 30px); top: 30px; }
-.preview-banner + .admin-shell { min-height: calc(100dvh - 30px); }
-.preview-banner + .admin-shell .admin-topbar { top: 30px; }
 @media (max-width: 680px) { .admin-topbar { height: 60px; gap: 10px; } }
 .admin-mobile-nav { inset: auto 0 0; padding: 8px 12px calc(8px + env(safe-area-inset-bottom, 0px)); border: 0; border-radius: 0; background: var(--color-surface); backdrop-filter: none; box-shadow: 0 -1px 0 var(--color-line); }
 .admin-mobile-nav > button { font-size: 11px; font-weight: 500; min-height: 44px; border-radius: 7px; }
