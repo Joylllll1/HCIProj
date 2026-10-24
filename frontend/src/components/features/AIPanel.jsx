@@ -73,7 +73,7 @@ function MessageBubble({ message, isLastAssistant, onRegenerate }) {
     >
       <div className="relative max-w-[85%] group">
         {isAI && showActions && (
-          <div className="absolute -top-7 left-0 flex items-center gap-1 bg-white border border-line-soft rounded-full px-2 py-1 shadow-sm">
+          <div className="absolute -top-7 left-0 flex items-center gap-1 bg-surface border border-line-soft rounded-full px-2 py-1 shadow-sm">
             <button
               onClick={handleCopy}
               className="flex items-center gap-1 text-xs text-text-3 hover:text-text transition-colors"
@@ -167,7 +167,7 @@ function OptionPill({ active, label, description, onClick, disabled = false }) {
       className={`w-full text-left p-3 rounded-2xl border transition-all ${
         active
           ? 'border-blue bg-blue-soft shadow-sm'
-          : 'border-line bg-white hover:border-blue/40 hover:bg-surface-soft'
+          : 'border-line bg-surface hover:border-blue/40 hover:bg-surface-soft'
       } ${disabled ? 'opacity-60 cursor-not-allowed' : ''}`}
     >
       <p className="text-sm font-semibold text-text">{label}</p>
@@ -192,7 +192,7 @@ function PersonaSettingsView({
   onClearError,
 }) {
   return (
-    <div className="fixed inset-0 z-[120] bg-white flex flex-col">
+    <div className="fixed inset-0 z-[120] bg-surface flex flex-col">
       <div className="flex items-center justify-between px-6 py-4 border-b border-line-soft">
         <button
           type="button"
@@ -220,7 +220,7 @@ function PersonaSettingsView({
             </p>
           </div>
 
-          <div className="rounded-3xl border border-line bg-white px-5 py-4">
+          <div className="rounded-3xl border border-line bg-surface px-5 py-4">
             <p className="text-sm font-semibold text-text">当前生效风格</p>
             <div className="mt-3 flex flex-wrap gap-2 text-xs text-text-2">
               {!!effectivePersona.role && (
@@ -265,12 +265,12 @@ function PersonaSettingsView({
           )}
 
           {isPersonaLoading ? (
-            <div className="rounded-3xl border border-line bg-white px-5 py-10 text-center text-sm text-text-2">
+            <div className="rounded-3xl border border-line bg-surface px-5 py-10 text-center text-sm text-text-2">
               正在加载聊天风格设置...
             </div>
           ) : (
             <>
-              <section className="rounded-3xl border border-line bg-white p-5">
+              <section className="rounded-3xl border border-line bg-surface p-5">
                 <p className="text-sm font-semibold text-text">1. 角色</p>
                 <input
                   type="text"
@@ -285,7 +285,7 @@ function PersonaSettingsView({
                 </p>
               </section>
 
-              <section className="rounded-3xl border border-line bg-white p-5">
+              <section className="rounded-3xl border border-line bg-surface p-5">
                 <p className="text-sm font-semibold text-text">2. 人设</p>
                 <textarea
                   value={personaDraft.persona}
@@ -305,7 +305,7 @@ function PersonaSettingsView({
                 </div>
               </section>
 
-              <section className="rounded-3xl border border-line bg-white p-5">
+              <section className="rounded-3xl border border-line bg-surface p-5">
                 <p className="text-sm font-semibold text-text">3. 语气</p>
                 <input
                   type="text"
@@ -320,7 +320,7 @@ function PersonaSettingsView({
                 </p>
               </section>
 
-              <section className="rounded-3xl border border-line bg-white p-5">
+              <section className="rounded-3xl border border-line bg-surface p-5">
                 <p className="text-sm font-semibold text-text">4. 直接程度</p>
                 <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 mt-4">
                   <OptionPill
@@ -343,7 +343,7 @@ function PersonaSettingsView({
                 </div>
               </section>
 
-              <section className="rounded-3xl border border-line bg-white p-5">
+              <section className="rounded-3xl border border-line bg-surface p-5">
                 <p className="text-sm font-semibold text-text">5. 回复长度</p>
                 <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 mt-4">
                   <OptionPill
@@ -366,7 +366,7 @@ function PersonaSettingsView({
                 </div>
               </section>
 
-              <section className="rounded-3xl border border-line bg-white p-5">
+              <section className="rounded-3xl border border-line bg-surface p-5">
                 <p className="text-sm font-semibold text-text">6. 额外要求</p>
                 <textarea
                   value={personaDraft.customInstruction}
@@ -389,13 +389,13 @@ function PersonaSettingsView({
         </div>
       </div>
 
-      <div className="border-t border-line-soft px-6 py-4 bg-white">
+      <div className="border-t border-line-soft px-6 py-4 bg-surface">
         <div className="max-w-[760px] mx-auto flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <button
             type="button"
             onClick={onReset}
             disabled={isPersonaLoading || isPersonaSaving}
-            className="inline-flex items-center justify-center gap-2 h-10 px-4 border border-line rounded-full text-sm text-text-2 bg-white transition-colors hover:bg-surface-soft disabled:opacity-60 disabled:cursor-not-allowed"
+            className="inline-flex items-center justify-center gap-2 h-10 px-4 border border-line rounded-full text-sm text-text-2 bg-surface transition-colors hover:bg-surface-soft disabled:opacity-60 disabled:cursor-not-allowed"
           >
             恢复默认
           </button>
@@ -405,7 +405,7 @@ function PersonaSettingsView({
               type="button"
               onClick={onSaveDefault}
               disabled={isPersonaLoading || isPersonaSaving || !personaDirty}
-              className="inline-flex items-center justify-center h-10 px-4 border border-line rounded-full text-sm text-text bg-white transition-colors hover:bg-surface-soft disabled:opacity-60 disabled:cursor-not-allowed"
+              className="inline-flex items-center justify-center h-10 px-4 border border-line rounded-full text-sm text-text bg-surface transition-colors hover:bg-surface-soft disabled:opacity-60 disabled:cursor-not-allowed"
             >
               {isPersonaSaving ? '保存中...' : '设为默认'}
             </button>
@@ -627,13 +627,15 @@ function AIPanel({ open, onClose }) {
     : null;
 
   return (
-    <div className={`ai-slide-panel fixed inset-0 z-[100] ${open ? 'open pointer-events-auto' : 'pointer-events-none'}`}>
+    <div aria-hidden={!open} inert={open ? undefined : ''} className={`ai-slide-panel fixed inset-0 z-[100] ${open ? 'open pointer-events-auto' : 'pointer-events-none'}`}>
       <div
         className="ai-slide-overlay absolute inset-0 opacity-0 bg-black/30 transition-opacity duration-[250ms] ai-slide-panel-open:opacity-100"
         onClick={handleClosePanel}
       />
       <aside
-        className={`ai-slide-content absolute top-0 right-0 bottom-0 w-full max-w-[840px] sm:w-[min(92vw,840px)] flex flex-col p-6 border-l border-line bg-white shadow-md translate-x-full transition-transform duration-[280ms] ease-[cubic-bezier(0.16,1,0.3,1)] overflow-hidden ai-slide-panel-open:translate-x-0 ${isPersonaViewOpen ? 'opacity-0 pointer-events-none' : ''}`}
+        aria-hidden={isPersonaViewOpen || undefined}
+        inert={isPersonaViewOpen ? '' : undefined}
+        className={`ai-slide-content absolute top-0 right-0 bottom-0 w-full max-w-[840px] sm:w-[min(92vw,840px)] flex flex-col p-6 border-l border-line bg-surface shadow-md translate-x-full transition-transform duration-[280ms] ease-[cubic-bezier(0.16,1,0.3,1)] overflow-hidden ai-slide-panel-open:translate-x-0 ${isPersonaViewOpen ? 'opacity-0 pointer-events-none' : ''}`}
       >
         <>
             <div className="ai-slide-head flex items-center justify-between mb-5">
@@ -653,7 +655,7 @@ function AIPanel({ open, onClose }) {
               </div>
               <div className="flex items-center gap-2">
                 <button
-                  className="grid w-8 h-8 place-items-center border border-line rounded-full bg-white text-text-3 transition-colors duration-150 hover:text-text hover:border-text-3"
+                  className="grid w-8 h-8 place-items-center border border-line rounded-full bg-surface text-text-3 transition-colors duration-150 hover:text-text hover:border-text-3"
                   onClick={handleOpenPersonaSettings}
                   type="button"
                   title="聊天风格"
@@ -661,9 +663,10 @@ function AIPanel({ open, onClose }) {
                   <Icon name="settings" size={16} />
                 </button>
                 <button
-                  className="ai-slide-close grid w-8 h-8 place-items-center border border-line rounded-full bg-white text-text-3 transition-colors duration-150 hover:text-text hover:border-text-3"
+                  className="ai-slide-close grid w-8 h-8 place-items-center border border-line rounded-full bg-surface text-text-3 transition-colors duration-150 hover:text-text hover:border-text-3"
                   onClick={handleClosePanel}
                   type="button"
+                  aria-label="关闭树洞 AI"
                 >
                   <Icon name="close" />
                 </button>
@@ -671,7 +674,7 @@ function AIPanel({ open, onClose }) {
             </div>
 
             {showSessionList && (
-              <div className="absolute inset-y-0 left-0 w-64 bg-white border-r border-line z-10 p-4 flex flex-col">
+              <div className="absolute inset-y-0 left-0 w-64 bg-surface border-r border-line z-10 p-4 flex flex-col">
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="font-semibold text-text">会话列表</h3>
                   <button
@@ -744,9 +747,9 @@ function AIPanel({ open, onClose }) {
                 <div className="flex justify-start mb-4">
                   <div className="px-4 py-3 rounded-2xl bg-surface-soft rounded-tl-sm">
                     <div className="flex items-center gap-2">
-                      <span className="w-2 h-2 bg-blue rounded-full animate-bounce" />
-                      <span className="w-2 h-2 bg-blue rounded-full animate-bounce" style={{ animationDelay: '0.1s' }} />
-                      <span className="w-2 h-2 bg-blue rounded-full animate-bounce" style={{ animationDelay: '0.2s' }} />
+                      <span className="w-2 h-2 bg-blue rounded-full animate-pulse" />
+                      <span className="w-2 h-2 bg-blue rounded-full animate-pulse" style={{ animationDelay: '0.1s' }} />
+                      <span className="w-2 h-2 bg-blue rounded-full animate-pulse" style={{ animationDelay: '0.2s' }} />
                     </div>
                   </div>
                 </div>

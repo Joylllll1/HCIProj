@@ -47,7 +47,7 @@ describe('postStore fetchPosts', () => {
     await request;
 
     expect(usePostStore.getState().loading).toBe(false);
-    expect(postService.fetchPosts).toHaveBeenCalledWith(1, '', { limit: 20, sort: 'latest' });
+    expect(postService.fetchPosts).toHaveBeenCalledWith(1, '', { limit: 20, sort: 'latest', tag: '' });
     expect(usePostStore.getState().currentPage).toBe(1);
     expect(usePostStore.getState().totalPosts).toBe(1);
     expect(usePostStore.getState().posts).toEqual([
@@ -73,7 +73,7 @@ describe('postStore fetchPosts', () => {
 
     await usePostStore.getState().loadMorePosts();
 
-    expect(postService.fetchPosts).toHaveBeenCalledWith(2, 'tree', { limit: 20, sort: 'hot' });
+    expect(postService.fetchPosts).toHaveBeenCalledWith(2, 'tree', { limit: 20, sort: 'hot', tag: '' });
     expect(usePostStore.getState().currentPage).toBe(2);
     expect(usePostStore.getState().posts).toEqual([
       { id: 'post-1', title: 'First post', isLiked: false },
@@ -99,7 +99,7 @@ describe('postStore fetchPosts', () => {
 
     await usePostStore.getState().refreshFeed({ silent: true });
 
-    expect(postService.fetchPosts).toHaveBeenCalledWith(1, 'nju', { limit: 40, sort: 'hot' });
+    expect(postService.fetchPosts).toHaveBeenCalledWith(1, 'nju', { limit: 40, sort: 'hot', tag: '' });
     expect(usePostStore.getState().currentPage).toBe(2);
     expect(usePostStore.getState().totalPages).toBe(3);
   });
@@ -207,4 +207,21 @@ describe('postStore fetchPosts', () => {
       comments: 3,
     });
   });
+});
+
+it('keeps the previous feed and sort after a failure, then retries the requested sort and tag', async () => {
+  usePostStore.setState(usePostStore.getInitialState(), true);
+  const existing = [{ id: 'cached', title: 'Previous result' }];
+  usePostStore.setState({ posts: existing, feedLoaded: true, currentSort: 'latest' });
+  postService.fetchPosts.mockRejectedValueOnce(new Error('网络失败'));
+  await usePostStore.getState().fetchPosts(1, '图书馆', { sort: 'hot', tag: '求助' });
+  expect(usePostStore.getState().posts).toEqual(existing);
+  expect(usePostStore.getState().currentSort).toBe('latest');
+  expect(usePostStore.getState().feedError).toBe('网络失败');
+  postService.fetchPosts.mockResolvedValueOnce({ posts: [{ id: 'fresh' }], total: 1 });
+  await usePostStore.getState().retryFeed();
+  expect(postService.fetchPosts).toHaveBeenLastCalledWith(1, '图书馆', { limit: 20, sort: 'hot', tag: '求助' });
+  expect(usePostStore.getState().currentSort).toBe('hot');
+  expect(usePostStore.getState().currentTag).toBe('求助');
+  expect(usePostStore.getState().feedError).toBe('');
 });

@@ -1,4 +1,6 @@
-import React, { useState } from 'react';
+import PageHeader from '../common/PageHeader';
+import React from 'react';
+import useUiStore from '../../store/uiStore';
 import BookmarksPage from './BookmarksPage';
 import MyPostsPage from './MyPostsPage';
 import LikesPage from './LikesPage';
@@ -16,15 +18,18 @@ function MyPage({
   onCreateFolder, onRenameFolder, onDeleteFolder,
   onNavigate,
 }) {
-  const [activeTab, setActiveTab] = useState('posts');
+  const activeTab = useUiStore((s) => s.myTab);
+  const setActiveTab = (myTab) => useUiStore.setState({ myTab });
 
   return (
     <div className="my-page">
-      <nav className="my-sub-nav">
+      <PageHeader title="我的空间" description="你的帖子、收藏和喜欢，都在这里。" />
+      <nav className="my-sub-nav" aria-label="个人内容">
         {TABS.map((tab) => (
           <button
             key={tab.key}
             className={`my-sub-nav-btn ${activeTab === tab.key ? 'active' : ''}`}
+            aria-pressed={activeTab === tab.key}
             onClick={() => setActiveTab(tab.key)}
             type="button"
           >

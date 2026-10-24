@@ -87,7 +87,7 @@ export const createPost = async (userId, data) => {
   return toPostDto(post.toObject(), userId);
 };
 
-export const getPosts = async ({ page = 1, limit = 20, query, sort = 'latest', userId } = {}) => {
+export const getPosts = async ({ page = 1, limit = 20, query, tag, sort = 'latest', userId } = {}) => {
   const filter = { isDeleted: false };
   if (query && query.trim()) {
     const pattern = new RegExp(escapeRegex(query.trim()), 'i');
@@ -97,6 +97,8 @@ export const getPosts = async ({ page = 1, limit = 20, query, sort = 'latest', u
       { tags: pattern },
     ];
   }
+
+  if (typeof tag === 'string' && tag.trim()) filter.tags = tag.trim();
 
   const skip = (page - 1) * limit;
   const sortSpec = resolveFeedSort(sort);

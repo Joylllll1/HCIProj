@@ -40,19 +40,23 @@ function applyReplyLikeState(commentsMap, commentId, replyId, patch) {
 
 const useCommentStore = create((set, get) => ({
   commentsMap: {},
+  loadStates: {},
   loadedPostIds: {},
   pendingCommentUnlikes: [],
   submittingCommentUnlikes: [],
 
   fetchComments: async (postId) => {
+    if (get().loadStates[postId]?.loading) return;
+    set((s) => ({ loadStates: { ...s.loadStates, [postId]: { loading: true, error: '' } } }));
     try {
       const comments = await commentService.getComments(postId);
       set((state) => ({
         commentsMap: { ...state.commentsMap, [postId]: comments },
+        loadStates: { ...state.loadStates, [postId]: { loading: false, error: '' } },
         loadedPostIds: { ...state.loadedPostIds, [postId]: true },
       }));
-    } catch {
-      // Silently fail — UI handles empty state
+    } catch (err) {
+      set((s) => ({ loadStates: { ...s.loadStates, [postId]: { loading: false, error: err.message || '评论加载失败，请重试。' } } }));
     }
   },
 

@@ -1,3 +1,4 @@
+import Select from '../common/Select';
 import React from 'react';
 import useAuthStore from '../../store/authStore';
 import Icon from '../common/Icon';
@@ -38,10 +39,10 @@ export default function LoginPage({ onNavigate }) {
   return (
     <div className="auth-page">
       {/* Brand */}
-      <div className="auth-brand">
-        <span className="auth-brand-mark">Ｎ</span>
-        <span className="auth-brand-text">NJU 树洞</span>
-      </div>
+      <button type="button" className="auth-brand auth-brand-button" onClick={() => onNavigate('home')} aria-label="返回南大树洞首页">
+        <span className="auth-brand-mark"><Icon name="park" /></span>
+        <span className="auth-brand-text">南大树洞</span>
+      </button>
 
       <div className="auth-card">
         <h1 className="auth-title">登录</h1>
@@ -50,7 +51,7 @@ export default function LoginPage({ onNavigate }) {
         <form onSubmit={handleSubmit} noValidate>
           {/* General error */}
           {error && (
-            <div className="auth-general-error">
+            <div className="auth-general-error" role="alert">
               <Icon name="error_outline" />
               <span>{error}</span>
             </div>
@@ -67,14 +68,10 @@ export default function LoginPage({ onNavigate }) {
                 placeholder="学号"
                 value={prefix}
                 onChange={(e) => { setPrefix(e.target.value); setError(''); }}
-                autoComplete="off"
+                autoComplete="username"
                 disabled={loading}
               />
-              <select className="auth-email-select" value={domain} onChange={(e) => setDomain(e.target.value)} disabled={loading}>
-                {DOMAINS.map((d) => (
-                  <option key={d.value} value={d.value}>{d.label}</option>
-                ))}
-              </select>
+              <Select aria-label="学校邮箱后缀" className="auth-email-select" value={domain} onChange={setDomain} disabled={loading} options={DOMAINS.map(d => ({ value: d.value, label: d.label }))} />
             </div>
           </div>
 
@@ -91,7 +88,6 @@ export default function LoginPage({ onNavigate }) {
               autoComplete="current-password"
               disabled={loading}
             />
-            {error && <p className="auth-error-text">{error}</p>}
           </div>
 
           {/* Forgot password */}

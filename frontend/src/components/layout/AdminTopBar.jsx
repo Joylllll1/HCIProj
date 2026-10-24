@@ -1,4 +1,5 @@
 import React from 'react';
+import ThemeToggle from '../common/ThemeToggle';
 import Icon from '../common/Icon';
 import useAuthStore from '../../store/authStore';
 import useUiStore from '../../store/uiStore';
@@ -38,9 +39,11 @@ function AdminTopBar() {
   };
 
   return (
-    <header className="lg:hidden sticky top-0 z-20 flex items-center justify-end h-[60px] px-7 border-b border-line bg-white/82 backdrop-blur-xs max-sm:h-[48px] max-sm:px-3">
+    <header className="admin-topbar sticky top-0 z-20 flex items-center justify-end h-[60px] px-7 border-b border-line bg-surface/82 backdrop-blur-xs max-sm:h-[48px] max-sm:px-3">
+      <span className="admin-topbar-caption">内容管理</span>
+      <ThemeToggle />
       <button
-        className="flex items-center gap-1.5 h-[34px] px-4 border border-red/40 rounded-full text-red text-[13px] font-bold bg-white transition-all duration-150 hover:bg-red-50 hover:border-red"
+        className="flex items-center gap-1.5 h-[34px] px-4 border border-red/40 rounded-full text-red text-[13px] font-bold bg-surface transition-all duration-150 hover:bg-red-50 hover:border-red"
         onClick={handleLogout}
         type="button"
       >

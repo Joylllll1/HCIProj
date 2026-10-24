@@ -174,6 +174,11 @@ const usePostStore = create((set, get) => ({
   totalPosts: 0,
   currentQuery: '',
   currentSort: 'latest',
+  currentTag: '',
+  feedLoaded: false,
+  feedError: '',
+  moreError: '',
+  failedFeedRequest: null,
   pageSize: FEED_PAGE_SIZE,
   pendingUnlikePostIds: [],
   submittingUnlikePostIds: [],
@@ -182,16 +187,12 @@ const usePostStore = create((set, get) => ({
     const state = get();
     const normalizedQuery = normalizeFeedQuery(query);
     const normalizedSort = normalizeFeedSort(options.sort ?? state.currentSort);
+    const tag = typeof options.tag === 'string' ? options.tag.trim() : state.currentTag;
     const append = options.append === true && page > 1;
     const limit = Number.isFinite(options.limit) ? options.limit : state.pageSize;
     const requestId = ++latestFeedRequestId;
-    const shouldShowLoading = !append
-      && !options.silent
-      && (
-        state.posts.length === 0
-        || normalizedQuery !== state.currentQuery
-        || normalizedSort !== state.currentSort
-      );
+    set(append ? { moreError: '' } : { feedError: '', loadingMore: false });
+    const shouldShowLoading = !append && !options.silent;
 
     if (shouldShowLoading) {
       set({ loading: true });
@@ -204,9 +205,10 @@ const usePostStore = create((set, get) => ({
       const data = await postService.fetchPosts(page, normalizedQuery, {
         limit,
         sort: normalizedSort,
+        tag,
       });
       if (requestId !== latestFeedRequestId) {
-        return data;
+        return null;
       }
 
       set((state) => ({
@@ -223,26 +225,37 @@ const usePostStore = create((set, get) => ({
         totalPosts: data.total || 0,
         currentQuery: normalizedQuery,
         currentSort: normalizedSort,
+        currentTag: tag,
+        feedLoaded: true,
+        feedError: '',
+        moreError: '',
+        failedFeedRequest: null,
         loading: false,
         loadingMore: false,
       }));
       return data;
-    } catch {
+    } catch (err) {
       if (requestId === latestFeedRequestId) {
-        set({ loading: false, loadingMore: false });
+        set({ loading: false, loadingMore: false, failedFeedRequest: append ? get().failedFeedRequest : { page, query: normalizedQuery, options: { ...options, tag, sort: normalizedSort } }, [append ? 'moreError' : 'feedError']: err.message || '树洞加载失败，请重试。' });
       }
       return null;
     }
   },
 
+  retryFeed: () => {
+    const request = get().failedFeedRequest;
+    return request ? get().fetchPosts(request.page, request.query, request.options) : null;
+  },
+
   loadMorePosts: async () => {
-    const { loadingMore, currentPage, totalPages, currentQuery, currentSort } = get();
-    if (loadingMore || currentPage >= totalPages) {
+    const { loading, loadingMore, currentPage, totalPages, currentQuery, currentSort, currentTag } = get();
+    if (loading || loadingMore || currentPage >= totalPages) {
       return null;
     }
     return get().fetchPosts(currentPage + 1, currentQuery, {
       append: true,
       sort: currentSort,
+      tag: currentTag,
     });
   },
 

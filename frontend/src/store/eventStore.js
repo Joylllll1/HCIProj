@@ -12,6 +12,8 @@ const useEventStore = create((set, get) => ({
     deletedEvents: [],
     publicLoading: false,
     myEventsLoading: false,
+    publicError: null,
+    myEventsError: null,
   pendingLoading: false,
   approvedLoading: false,
   rejectedLoading: false,
@@ -19,23 +21,25 @@ const useEventStore = create((set, get) => ({
 
   // Fetch public events (all users)
   fetchPublicEvents: async () => {
-    set({ publicLoading: true, error: null });
+    set({ publicLoading: true, publicError: null, error: null });
     try {
       const events = await eventService.getPublicEvents();
-      set({ publicEvents: events, publicLoading: false });
+      set({ publicEvents: events, publicLoading: false, publicError: null });
     } catch (err) {
-      set({ error: err.message, publicLoading: false });
+      const message = err?.message || '活动加载失败，请重试。';
+      set({ error: message, publicError: message, publicLoading: false });
     }
   },
 
   // Fetch my events (current user's submissions)
   fetchMyEvents: async () => {
-    set({ myEventsLoading: true, error: null });
+    set({ myEventsLoading: true, myEventsError: null, error: null });
     try {
       const events = await eventService.getMyEvents();
-      set({ myEvents: events, myEventsLoading: false });
+      set({ myEvents: events, myEventsLoading: false, myEventsError: null });
     } catch (err) {
-      set({ error: err.message, myEventsLoading: false });
+      const message = err?.message || '申请记录加载失败，请重试。';
+      set({ error: message, myEventsError: message, myEventsLoading: false });
     }
   },
 

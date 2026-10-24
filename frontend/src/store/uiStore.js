@@ -33,6 +33,33 @@ export const ADMIN_PAGE_TABS = {
   'admin-audit': 'audit',
 };
 
+export const EMPTY_QUICK_DRAFT = {
+  title: '',
+  content: '',
+  tags: [],
+  images: [],
+};
+
+export function normalizeQuickDraft(draft = {}) {
+  const images = Array.isArray(draft.images)
+    ? draft.images
+    : draft.image
+      ? [draft.image]
+      : [];
+  const tags = Array.isArray(draft.tags)
+    ? draft.tags
+    : draft.tag
+      ? [draft.tag]
+      : [];
+
+  return {
+    title: typeof draft.title === 'string' ? draft.title : '',
+    content: typeof draft.content === 'string' ? draft.content : '',
+    tags: [...tags],
+    images: [...images],
+  };
+}
+
 // 反向映射：URL → page name
 function urlToPage(url) {
   const path = url.replace(/\/+$/, '') || '/';
@@ -71,6 +98,8 @@ const useUiStore = create((set, get) => ({
   activePage: getInitialPage(),
   draftId: null,
   pendingNavigation: null,
+  navigationSaving: false,
+  navigationError: '',
   leaveConfirm: {
     open: false,
     title: '离开当前页面？',
@@ -83,6 +112,22 @@ const useUiStore = create((set, get) => ({
   unsavedChangesHandler: null,
   // Search
   query: '',
+  feedTag: '',
+  homeScroll: 0,
+  expandedPostIds: [],
+  responseDrafts: {},
+  responseActivities: {},
+  bookmarkFolder: 'all',
+  myTab: 'posts',
+  quickDraft: { ...EMPTY_QUICK_DRAFT },
+  quickActivity: 0,
+  quickDraftGeneration: 0,
+  quickSubmitting: false,
+  quickPublishToken: 0,
+  quickPublishError: '',
+  quickImageProcessingCount: 0,
+  quickImageJobSequence: 0,
+  quickImageJobs: [],
   // Carousel navigation
   eventToOpen: null,
   // Scroll-to-feed signal (incremented to trigger HomePage scroll)
@@ -121,40 +166,51 @@ const useUiStore = create((set, get) => ({
         ...config,
         open: true,
       },
+      navigationError: '',
     })),
-  closeLeaveConfirm: () =>
+  closeLeaveConfirm: () => {
+    if (get().navigationSaving) return;
     set((state) => ({
       leaveConfirm: {
         ...state.leaveConfirm,
         open: false,
       },
       pendingNavigation: null,
-    })),
+      navigationError: '',
+    }));
+  },
   confirmPendingNavigation: async () => {
     const { pendingNavigation, unsavedChangesHandler } = get();
-    if (!pendingNavigation) return;
+    if (!pendingNavigation || get().navigationSaving) return;
+    set({ navigationSaving: true, navigationError: '' });
 
     try {
       if (pendingNavigation.mode === 'save' && unsavedChangesHandler) {
         const shouldProceed = await unsavedChangesHandler();
-        if (!shouldProceed) return;
+        if (!shouldProceed) {
+          set({ navigationError: '尚未保存成功，内容已保留。请重试或留在这里继续编辑。' });
+          return;
+        }
       }
       set((state) => ({
         leaveConfirm: { ...state.leaveConfirm, open: false },
         pendingNavigation: null,
+        navigationSaving: false,
       }));
       if (typeof pendingNavigation.action === 'function') {
         await pendingNavigation.action();
         return;
       }
       get().navigate(pendingNavigation.page, pendingNavigation.params, { force: true });
-    } catch {
-      // Keep dialog open when save flow fails.
+    } catch (error) {
+      set({ navigationError: error.message || '保存失败，内容已保留，请重试。' });
+    } finally {
+      set({ navigationSaving: false });
     }
   },
   discardPendingNavigation: async () => {
     const { pendingNavigation } = get();
-    if (!pendingNavigation) return;
+    if (!pendingNavigation || get().navigationSaving) return;
 
     set((state) => ({
       leaveConfirm: { ...state.leaveConfirm, open: false },
@@ -168,12 +224,14 @@ const useUiStore = create((set, get) => ({
     get().navigate(pendingNavigation.page, pendingNavigation.params, { force: true });
   },
   requestNavigationConfirmation: (config) => {
+    if (get().navigationSaving) return;
     set({
       pendingNavigation: config.pendingNavigation,
     });
     get().openLeaveConfirm(config.dialog);
   },
   navigate: (page, params, options = {}) => {
+    if (get().navigationSaving) return false;
     const { unsavedChangesHandler } = get();
     if (!options.force && unsavedChangesHandler) {
       set({
@@ -204,6 +262,7 @@ const useUiStore = create((set, get) => ({
       }
       return false;
     }
+    if (get().activePage === 'home') set({ homeScroll: window.scrollY });
     let url;
     if (page === 'detail' && params?.selectedPost) {
       url = `/detail/${params.selectedPost.id}`;
@@ -225,6 +284,7 @@ const useUiStore = create((set, get) => ({
     return true;
   },
   handlePopState: () => {
+    if (get().navigationSaving) { window.history.go(1); return; }
     const path = window.location.pathname;
     const searchParams = new URLSearchParams(window.location.search);
     const draftId = searchParams.get('draftId');
@@ -253,7 +313,90 @@ const useUiStore = create((set, get) => ({
   },
 
   // Search
-  setQuery: (q) => set({ query: q }),
+  setQuery: (q) => set({ query: q.trim(), homeScroll: 0 }),
+  setFeedTag: (tag) => set({ feedTag: tag, homeScroll: 0 }),
+
+  updateQuickDraft: (patch) => set((state) => ({
+    quickDraft: normalizeQuickDraft({ ...state.quickDraft, ...patch }),
+    quickActivity: state.quickActivity + 1,
+    quickPublishError: '',
+  })),
+  resetQuickDraft: () => set((state) => ({
+    quickDraft: { ...EMPTY_QUICK_DRAFT },
+    quickActivity: state.quickActivity + 1,
+    quickDraftGeneration: state.quickDraftGeneration + 1,
+    quickSubmitting: false,
+    quickPublishToken: state.quickPublishToken + 1,
+    quickPublishError: '',
+    quickImageProcessingCount: 0,
+    quickImageJobs: [],
+  })),
+  beginQuickPublish: () => {
+    const state = get();
+    if (state.quickSubmitting) return null;
+    const owner = {
+      activity: state.quickActivity + 1,
+      generation: state.quickDraftGeneration,
+      token: state.quickPublishToken + 1,
+    };
+    set({
+      quickActivity: owner.activity,
+      quickSubmitting: true,
+      quickPublishToken: owner.token,
+      quickPublishError: '',
+    });
+    return owner;
+  },
+  clearQuickDraftIfOwned: (owner) => {
+    const state = get();
+    if (!owner
+      || state.quickActivity !== owner.activity
+      || state.quickDraftGeneration !== owner.generation
+      || state.quickPublishToken !== owner.token) return false;
+    set({
+      quickDraft: { ...EMPTY_QUICK_DRAFT },
+      quickActivity: state.quickActivity + 1,
+      quickDraftGeneration: state.quickDraftGeneration + 1,
+      quickPublishError: '',
+    });
+    return true;
+  },
+  finishQuickPublish: (owner) => {
+    if (!owner || get().quickPublishToken !== owner.token) return;
+    set({ quickSubmitting: false });
+  },
+  setQuickPublishError: (owner, message) => {
+    const state = get();
+    if (!owner
+      || state.quickActivity !== owner.activity
+      || state.quickDraftGeneration !== owner.generation
+      || state.quickPublishToken !== owner.token) return false;
+    set({ quickPublishError: message });
+    return true;
+  },
+  beginQuickImageProcessing: (count) => {
+    if (!Number.isInteger(count) || count <= 0) return null;
+    let jobId = null;
+    set((state) => {
+      jobId = state.quickImageJobSequence + 1;
+      const job = { id: jobId, count, generation: state.quickDraftGeneration };
+      return {
+        quickImageJobSequence: jobId,
+        quickImageProcessingCount: state.quickImageProcessingCount + count,
+        quickImageJobs: [...state.quickImageJobs, job],
+      };
+    });
+    return jobId;
+  },
+  finishQuickImageProcessing: (jobId) => {
+    const state = get();
+    if (!state.quickImageJobs.some((job) => job.id === jobId)) return;
+    const quickImageJobs = state.quickImageJobs.filter((job) => job.id !== jobId);
+    set({
+      quickImageJobs,
+      quickImageProcessingCount: quickImageJobs.reduce((sum, job) => sum + job.count, 0),
+    });
+  },
 
   // Event navigation
   openEventFromCarousel: (eventId) => {

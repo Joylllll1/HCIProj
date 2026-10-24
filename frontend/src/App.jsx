@@ -124,6 +124,8 @@ function App() {
   const activePage = useUiStore(selectActivePage);
   const uiDraftId = useUiStore(selectUiDraftId);
   const leaveConfirm = useUiStore(selectLeaveConfirm);
+  const navigationSaving = useUiStore((s) => s.navigationSaving);
+  const navigationError = useUiStore((s) => s.navigationError);
   const closeLeaveConfirm = useUiStore(selectCloseLeaveConfirm);
   const confirmPendingNavigation = useUiStore(selectConfirmPendingNavigation);
   const discardPendingNavigation = useUiStore(selectDiscardPendingNavigation);
@@ -166,6 +168,10 @@ function App() {
     detailPost && (!detailRoutePostId || detailPost.id === detailRoutePostId),
   );
   const user = useAuthStore((s) => s.user);
+  React.useEffect(() => {
+    useUiStore.setState({ responseDrafts: {}, responseActivities: {}, expandedPostIds: [], composeSeed: null });
+    useUiStore.getState().resetQuickDraft();
+  }, [currentUserId]);
 
   // ── Hooks ──
   const { toggleLike, toggleBookmark, selectFolder: handleSelectFolder } = useLikeBookmark();
@@ -200,12 +206,7 @@ function App() {
     };
 
     if (!user) {
-      startPolling();
-      return () => {
-        if (intervalId) {
-          window.clearInterval(intervalId);
-        }
-      };
+      return undefined;
     }
 
     const connectStream = () => {
@@ -275,10 +276,10 @@ function App() {
 
       const currentPostId = selectedPost?.id;
       const parseCurrentPostEvent = (event) => {
-        if (activePage !== 'detail' || !currentPostId) return null;
         try {
           const data = JSON.parse(event.data || '{}');
-          return data.postId === currentPostId ? data : null;
+          const loaded = useCommentStore.getState().loadedPostIds[data.postId];
+          return ((activePage === 'detail' && data.postId === currentPostId) || loaded) ? data : null;
         } catch {
           return null;
         }
@@ -287,28 +288,28 @@ function App() {
       eventSource.addEventListener('comment-created', (event) => {
         const data = parseCurrentPostEvent(event);
         if (data?.comment) {
-          upsertComment(currentPostId, data.comment);
+          upsertComment(data.postId, data.comment);
         }
       });
 
       eventSource.addEventListener('comment-deleted', (event) => {
         const data = parseCurrentPostEvent(event);
         if (data?.commentId) {
-          removeComment(currentPostId, data.commentId);
+          removeComment(data.postId, data.commentId);
         }
       });
 
       eventSource.addEventListener('reply-created', (event) => {
         const data = parseCurrentPostEvent(event);
         if (data?.commentId && data?.reply) {
-          upsertReply(currentPostId, data.commentId, data.reply);
+          upsertReply(data.postId, data.commentId, data.reply);
         }
       });
 
       eventSource.addEventListener('reply-deleted', (event) => {
         const data = parseCurrentPostEvent(event);
         if (data?.commentId && data?.replyId) {
-          removeReply(currentPostId, data.commentId, data.replyId);
+          removeReply(data.postId, data.commentId, data.replyId);
         }
       });
     };
@@ -506,6 +507,7 @@ function App() {
       await addComment(selectedPost.id, content, image);
     } catch (err) {
       showToast(err.message || '评论失败');
+      throw err;
     }
   };
 
@@ -515,6 +517,7 @@ function App() {
       await useCommentStore.getState().addReply(commentId, content, image, false, replyToId);
     } catch (err) {
       showToast(err.message || '回复失败');
+      throw err;
     }
   };
 
@@ -553,7 +556,8 @@ function App() {
 
   // ── Render ──
   return (
-    <div className="flex min-h-screen">
+    <div className="app-shell flex min-h-screen">
+      <a className="skip-link" href="#main-content">跳到主要内容</a>
       <Sidebar activePage={activePage} onNavigate={navigate} />
       <div className="min-w-0 flex-1">
         <TopBar
@@ -562,11 +566,12 @@ function App() {
           onNavigate={navigate}
           onAIOpen={handleToggleAi}
         />
-        <main className="min-w-0 overflow-x-hidden p-6 pb-12 max-md:px-4 max-md:pt-5 max-md:pb-24">
+        <main id="main-content" className="app-main min-w-0 p-6 pb-12 max-md:px-4 max-md:pt-5 max-md:pb-24">
           {activePage === 'home' && <HomePage />}
           {activePage === 'detail' && (
             isResolvedDetailPost ? (
               <DetailPage
+                key={detailPost.id}
                 post={detailPost}
                 comments={comments}
                 liked={detailPost?.isLiked}
@@ -676,10 +681,12 @@ function App() {
         open={leaveConfirm.open}
         title={leaveConfirm.title}
         description={leaveConfirm.description}
-        confirmText={leaveConfirm.confirmText}
+        confirmText={navigationSaving ? '保存中…' : leaveConfirm.confirmText}
         discardText={leaveConfirm.discardText}
         cancelText={leaveConfirm.cancelText}
         mode={leaveConfirm.mode}
+        pending={navigationSaving}
+        error={navigationError}
         onConfirm={confirmPendingNavigation}
         onDiscard={discardPendingNavigation}
         onCancel={closeLeaveConfirm}
