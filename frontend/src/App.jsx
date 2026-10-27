@@ -124,6 +124,8 @@ function App() {
   const aiOpen = useUiStore(selectAiOpen);
   const closeAi = useUiStore(selectCloseAi);
   const activePage = useUiStore(selectActivePage);
+  // History can move between two detail URLs without changing activePage.
+  useUiStore((s) => s.routeVersion);
   const uiDraftId = useUiStore(selectUiDraftId);
   const leaveConfirm = useUiStore(selectLeaveConfirm);
   const navigationSaving = useUiStore((s) => s.navigationSaving);
@@ -162,10 +164,9 @@ function App() {
   const removeComment = useCommentStore(selectRemoveComment);
   const upsertReply = useCommentStore(selectUpsertReply);
   const removeReply = useCommentStore(selectRemoveReply);
-  const detailRoutePostId = React.useMemo(() => {
-    if (activePage !== 'detail' || typeof window === 'undefined') return null;
-    return window.location.pathname.match(/^\/detail\/(.+)/)?.[1] || null;
-  }, [activePage]);
+  const detailRoutePostId = activePage === 'detail' && typeof window !== 'undefined'
+    ? window.location.pathname.match(/^\/detail\/(.+)/)?.[1] || null
+    : null;
   const detailPost = selectedPost ? getPostLikeView(selectedPost) : null;
   const isResolvedDetailPost = Boolean(
     detailPost && (!detailRoutePostId || detailPost.id === detailRoutePostId),

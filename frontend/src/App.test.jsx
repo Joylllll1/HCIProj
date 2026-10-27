@@ -364,6 +364,25 @@ describe('App detail deletion flow', () => {
     });
   });
 
+  it('loads the new URL when moving between detail pages and when going back', async () => {
+    useUiStore.setState({ navigate: useUiStore.getInitialState().navigate });
+    fetchPostById.mockImplementation(async (id) => ({
+      id, ownerUserId: 'user-2', title: `Detail ${id}`, tags: ['树洞'], comments: 0,
+    }));
+    render(<App />);
+    expect(screen.getByTestId('detail-post-id')).toHaveTextContent('post-1');
+
+    act(() => useUiStore.getState().navigate('detail', { selectedPost: { id: 'post-2' } }));
+    await waitFor(() => expect(screen.getByTestId('detail-post-id')).toHaveTextContent('post-2'));
+    expect(fetchPostById).toHaveBeenCalledWith('post-2');
+    expect(window.location.pathname).toBe('/detail/post-2');
+
+    act(() => window.history.back());
+    await waitFor(() => expect(screen.getByTestId('detail-post-id')).toHaveTextContent('post-1'));
+    expect(window.location.pathname).toBe('/detail/post-1');
+    expect(fetchPostById).toHaveBeenCalledWith('post-1');
+  });
+
   it('deduplicates comment-created SSE updates and increments count once', async () => {
     useCommentStore.setState({
       commentsMap: {

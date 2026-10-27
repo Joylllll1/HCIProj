@@ -81,6 +81,81 @@ function getInitialPage() {
   return urlToPage(path) || 'home';
 }
 
+function getInitialHistoryIndex() {
+  if (typeof window === 'undefined') return 0;
+  const state = window.history.state || {};
+  const index = state.njuRouteIndex ?? 0;
+  if (state.njuRouteIndex == null) {
+    window.history.replaceState({ ...state, njuRouteIndex: index }, '');
+  }
+  return index;
+}
+
+function readHistoryTarget(fallbackIndex) {
+  const state = window.history.state || {};
+  const path = window.location.pathname;
+  const searchParams = new URLSearchParams(window.location.search);
+
+  return {
+    index: state.njuRouteIndex ?? fallbackIndex,
+    page: urlToPage(path) || 'home',
+    draftId: searchParams.get('draftId'),
+    href: `${path}${window.location.search}${window.location.hash}`,
+  };
+}
+
+function createHistoryRestore(target, expectedIndex) {
+  let resolve;
+  const restored = new Promise((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+
+  return {
+    expectedIndex,
+    target,
+    restored,
+    resolve,
+    accepted: false,
+  };
+}
+
+function createHistoryPendingNavigation(restore, get, set) {
+  return {
+    mode: 'save',
+    page: restore.target.page,
+    target: restore.target,
+    historyRestore: restore,
+    action: async () => {
+      restore.accepted = true;
+      await restore.restored;
+
+      const target = restore.target;
+      const delta = target.index - get().historyIndex;
+      if (delta === 0) {
+        set({ historyAction: null, historyContinuation: null });
+        return;
+      }
+
+      set({
+        historyAction: 'continue',
+        historyContinuation: { target },
+      });
+      window.history.go(delta);
+    },
+  };
+}
+
+function openHistoryLeaveConfirm(get) {
+  get().openLeaveConfirm({
+    title: '保存当前草稿？',
+    description: '你修改过内容但还没保存。现在离开会丢掉这次修改。',
+    confirmText: '保存并离开',
+    discardText: '不保存离开',
+    cancelText: '留在这里',
+    mode: 'save',
+  });
+}
+
 const SEED_NOTIFS = [
   { id: 'N-1', text: '你的帖子「杜厦图书馆五楼的夕阳」获得了 10 个新赞', time: '2分钟前', read: false },
   { id: 'N-2', text: '温柔的小蓝鲸 回复了你的评论', time: '15分钟前', read: false },
@@ -96,6 +171,11 @@ const useUiStore = create((set, get) => ({
   notifs: loadJSON('nju_notifs', SEED_NOTIFS),
   // Routing
   activePage: getInitialPage(),
+  routeVersion: 0,
+  historyIndex: getInitialHistoryIndex(),
+  historyAction: null,
+  historyRestore: null,
+  historyContinuation: null,
   draftId: null,
   pendingNavigation: null,
   navigationSaving: false,
@@ -195,12 +275,15 @@ const useUiStore = create((set, get) => ({
       set((state) => ({
         leaveConfirm: { ...state.leaveConfirm, open: false },
         pendingNavigation: null,
-        navigationSaving: false,
       }));
       if (typeof pendingNavigation.action === 'function') {
+        set({ navigationSaving: false });
         await pendingNavigation.action();
         return;
       }
+      const historyRestore = get().historyRestore;
+      if (historyRestore) await historyRestore.restored;
+      set({ navigationSaving: false });
       get().navigate(pendingNavigation.page, pendingNavigation.params, { force: true });
     } catch (error) {
       set({ navigationError: error.message || '保存失败，内容已保留，请重试。' });
@@ -271,45 +354,104 @@ const useUiStore = create((set, get) => ({
     } else {
       url = PAGE_URLS[page];
     }
+    let historyIndex = get().historyIndex;
     if (url) {
-      window.history.pushState({ page, params }, '', url);
+      window.history.replaceState({ ...window.history.state, njuRouteIndex: historyIndex }, '');
+      historyIndex += 1;
+      window.history.pushState({ page, params, njuRouteIndex: historyIndex }, '', url);
     }
-    set({
+    set((state) => ({
       activePage: page,
+      routeVersion: state.routeVersion + 1,
+      historyIndex,
       draftId: page === 'compose' ? params?.draftId ?? null : null,
       pendingNavigation: null,
       ...params,
-    });
+    }));
     window.scrollTo(0, 0);
     return true;
   },
   handlePopState: () => {
-    if (get().navigationSaving) { window.history.go(1); return; }
-    const path = window.location.pathname;
-    const searchParams = new URLSearchParams(window.location.search);
-    const draftId = searchParams.get('draftId');
-    const page = urlToPage(path) || 'home';
-    const { unsavedChangesHandler } = get();
-    if (unsavedChangesHandler) {
-      window.history.go(1);
-      set({
-        pendingNavigation: {
-          page,
-          params: page === 'compose' && draftId ? { draftId } : undefined,
-          mode: 'save',
-        },
-      });
-      get().openLeaveConfirm({
-        title: '保存当前草稿？',
-        description: '你修改过内容但还没保存。现在离开会丢掉这次修改。',
-        confirmText: '保存并离开',
-        discardText: '不保存离开',
-        cancelText: '留在这里',
-        mode: 'save',
-      });
+    const state = get();
+    const target = readHistoryTarget(state.historyIndex - 1);
+
+    if (state.historyRestore) {
+      const restore = state.historyRestore;
+      if (target.index === restore.expectedIndex) {
+        set({ historyAction: null, historyRestore: null });
+        restore.resolve();
+        return;
+      }
+
+      // A second browser Back/Forward can arrive before the restore traversal.
+      // Keep the restore we already requested, while remembering the newest
+      // actual destination the user selected. Browsers can cancel the earlier
+      // history.go() when another traversal arrives, so request restoration
+      // again relative to this latest physical entry.
+      restore.target = target;
+      const restoreDelta = restore.expectedIndex - target.index;
+      if (restoreDelta !== 0) window.history.go(restoreDelta);
+
+      const pendingNavigation = get().pendingNavigation;
+      if (pendingNavigation?.historyRestore === restore) {
+        set({
+          pendingNavigation: {
+            ...pendingNavigation,
+            page: target.page,
+            target,
+          },
+        });
+      } else if (!restore.accepted && !get().navigationSaving && get().unsavedChangesHandler) {
+        set({ pendingNavigation: createHistoryPendingNavigation(restore, get, set) });
+        openHistoryLeaveConfirm(get);
+      }
       return;
     }
-    set({ activePage: page, draftId });
+
+    if (state.historyContinuation) {
+      const continuationTarget = state.historyContinuation.target;
+      if (target.index === continuationTarget.index) {
+        set((current) => ({
+          activePage: target.page,
+          draftId: target.draftId,
+          historyIndex: target.index,
+          historyAction: null,
+          historyContinuation: null,
+          routeVersion: current.routeVersion + 1,
+        }));
+        return;
+      }
+
+      // This is a separate traversal that landed somewhere else while a
+      // confirmed continuation was pending. Let the normal guard handle it.
+      set({ historyAction: null, historyContinuation: null });
+    }
+
+    const { historyIndex, navigationSaving, unsavedChangesHandler } = get();
+    const delta = target.index - historyIndex;
+    if (delta === 0) return;
+
+    if (navigationSaving || unsavedChangesHandler) {
+      const restore = createHistoryRestore(target, historyIndex);
+      set({
+        historyAction: 'restore',
+        historyRestore: restore,
+      });
+      window.history.go(-delta);
+      if (navigationSaving) return;
+      set({ pendingNavigation: createHistoryPendingNavigation(restore, get, set) });
+      openHistoryLeaveConfirm(get);
+      return;
+    }
+
+    set((current) => ({
+      activePage: target.page,
+      draftId: target.draftId,
+      historyIndex: target.index,
+      historyAction: null,
+      historyContinuation: null,
+      routeVersion: current.routeVersion + 1,
+    }));
   },
 
   // Search
