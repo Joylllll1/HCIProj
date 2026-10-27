@@ -3,7 +3,14 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import ComposePage from './ComposePage';
 import useUiStore from '../../store/uiStore';
 import * as draftService from '../../services/draftService';
+import usePostStore from '../../store/postStore';
 import { fileToOptimizedDataUrl } from '../../utils/image';
+
+const createPostMock = vi.hoisted(() => vi.fn());
+
+vi.mock('../../services/postService', () => ({
+  createPost: createPostMock,
+}));
 
 vi.mock('../../services/draftService', () => ({
   fetchDraftById: vi.fn(),
@@ -59,6 +66,7 @@ beforeEach(() => {
     showToast,
     navigate,
   });
+  usePostStore.setState(usePostStore.getInitialState(), true);
 });
 
 afterEach(() => {
@@ -194,6 +202,32 @@ describe('ComposePage', () => {
     expect(useUiStore.getState().draftId).toBe('draft-1');
     expect(showToast).not.toHaveBeenCalledWith('发布成功');
     expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('adds the published draft response to the feed without creating a second post', async () => {
+    const publishedPost = {
+      id: 'post-from-draft',
+      title: '草稿标题',
+      content: '待发布内容',
+      likes: 0,
+      saves: 0,
+      comments: 0,
+      isLiked: false,
+    };
+    draftService.fetchDraftById.mockResolvedValue(savedDraft('待发布内容', { title: '草稿标题' }));
+    draftService.publishDraft.mockResolvedValueOnce(publishedPost);
+
+    render(<ComposePage draftId="draft-1" onPublish={vi.fn()} />);
+    await screen.findByDisplayValue('待发布内容');
+    fireEvent.click(screen.getByRole('button', { name: '发布动态' }));
+
+    await waitFor(() => {
+      expect(usePostStore.getState().posts[0]).toMatchObject(publishedPost);
+    });
+    expect(draftService.publishDraft).toHaveBeenCalledWith('draft-1');
+    expect(createPostMock).not.toHaveBeenCalled();
+    expect(usePostStore.getState().posts).toHaveLength(1);
+    expect(navigate).toHaveBeenCalledWith('home', undefined, { force: true });
   });
 
   it('preserves the route history state when saving and publishing a draft', async () => {

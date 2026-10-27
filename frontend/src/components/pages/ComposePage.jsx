@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import PageHeader from '../common/PageHeader';
 import Icon from '../common/Icon';
 import useUiStore from '../../store/uiStore';
+import usePostStore from '../../store/postStore';
 import * as draftService from '../../services/draftService';
 import { fileToOptimizedDataUrl, getImageGridLayout, MAX_POST_IMAGES } from '../../utils/image';
 
@@ -357,8 +358,11 @@ function ComposePage({ onPublish, draftId: initialDraftId }) {
           if (!editorMountedRef.current) return;
           publishTargetId = savedDraft.id;
         }
-        await draftService.publishDraft(publishTargetId);
+        const publishedPost = await draftService.publishDraft(publishTargetId);
         if (!editorMountedRef.current) return;
+        if (publishedPost) {
+          usePostStore.getState().addPublishedPost(publishedPost);
+        }
         draftsCreatedHereRef.current.delete(publishTargetId);
         showToast('发布成功');
         window.history.replaceState(window.history.state, '', '/compose');

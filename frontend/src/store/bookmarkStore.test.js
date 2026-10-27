@@ -1,6 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import useBookmarkStore from './bookmarkStore';
 
+function createDeferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 const fetchBookmarksMock = vi.fn();
 const migrateLegacyBookmarksMock = vi.fn();
 const createBookmarkFolderMock = vi.fn();
@@ -40,6 +50,25 @@ describe('bookmarkStore hydration', () => {
       { id: 'all', name: '全部', isDefault: true },
     ]);
     expect(useBookmarkStore.getState().initialized).toBe(true);
+  });
+
+  it('clears bookmark state and ignores a pending load from the previous account', async () => {
+    const request = createDeferred();
+    fetchBookmarksMock.mockReturnValueOnce(request.promise);
+    const pendingLoad = useBookmarkStore.getState().loadBookmarks();
+
+    useBookmarkStore.getState().resetForAccountChange();
+    request.resolve({
+      bookmarks: ['old-user-post'],
+      collectionFolders: [{ id: 'all', name: '全部', isDefault: true }],
+      bookmarkFolders: {},
+    });
+    await pendingLoad;
+
+    expect(useBookmarkStore.getState().bookmarks).toEqual([]);
+    expect(useBookmarkStore.getState().bookmarkFolders).toEqual({});
+    expect(useBookmarkStore.getState().loading).toBe(false);
+    expect(useBookmarkStore.getState().initialized).toBe(false);
   });
 
   it('migrates legacy local bookmark metadata once after loading from the server', async () => {

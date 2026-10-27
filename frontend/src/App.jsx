@@ -28,7 +28,9 @@ import { getUserId } from './utils';
 
 // ─── Stores ───
 import useBookmarkStore from './store/bookmarkStore';
+import useAIStore from './store/aiStore';
 import useCommentStore from './store/commentStore';
+import useEventStore from './store/eventStore';
 import usePostStore from './store/postStore';
 import useUiStore, { ADMIN_ROUTE_PAGES } from './store/uiStore';
 
@@ -132,6 +134,7 @@ function App() {
   const navigate = useUiStore(selectNavigate);
   const isAdmin = useAuthStore((s) => s.user?.role === 'admin');
   const currentUserId = useAuthStore((s) => s.user?._id);
+  const previousUserIdRef = React.useRef(currentUserId);
   const isAdminRoute = activePage === 'admin' || ADMIN_ROUTE_PAGES.includes(activePage);
 
   // ── 已登录用户不可访问 auth 页面（如通过后退回到 /login） ──
@@ -168,7 +171,24 @@ function App() {
     detailPost && (!detailRoutePostId || detailPost.id === detailRoutePostId),
   );
   const user = useAuthStore((s) => s.user);
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
+    if (previousUserIdRef.current !== currentUserId) {
+      usePostStore.getState().resetForAccountChange();
+      useCommentStore.getState().resetForAccountChange();
+      useBookmarkStore.getState().resetForAccountChange();
+      useAIStore.getState().resetForAccountChange();
+      useEventStore.getState().resetForAccountChange();
+      useNotificationStore.getState().reset();
+      useUiStore.setState({ aiOpen: false });
+      previousUserIdRef.current = currentUserId;
+      if (currentUserId && useAuthStore.getState().user?.role !== 'admin') {
+        useNotificationStore.getState().refresh();
+        const ui = useUiStore.getState();
+        if (ui.activePage === 'home') {
+          usePostStore.getState().fetchPosts(1, ui.query, { tag: ui.feedTag });
+        }
+      }
+    }
     useUiStore.setState({ responseDrafts: {}, responseActivities: {}, expandedPostIds: [], composeSeed: null });
     useUiStore.getState().resetQuickDraft();
   }, [currentUserId]);
@@ -423,7 +443,7 @@ function App() {
     }
 
     loadBookmarks().catch(() => {});
-  }, [initialized, isAuthenticated, isAdmin, loadBookmarks, resetBookmarks]);
+  }, [initialized, isAuthenticated, isAdmin, currentUserId, loadBookmarks, resetBookmarks]);
 
   // ── Landing page / Auth gate ──
   if (!initialized) return null;
@@ -675,7 +695,7 @@ function App() {
         </main>
         <MobileNav activePage={activePage} onNavigate={navigate} />
       </div>
-      <AIPanel open={aiOpen} onClose={closeAi} />
+      <AIPanel key={currentUserId} open={aiOpen} onClose={closeAi} />
       {toast && <Toast message={toast} onDone={clearToast} />}
       <ConfirmLeaveDialog
         open={leaveConfirm.open}

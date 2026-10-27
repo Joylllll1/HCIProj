@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import * as eventService from '../services/eventService';
 
+let myEventsRequestId = 0;
+
 const useEventStore = create((set, get) => ({
   // State
   publicEvents: [],
@@ -33,14 +35,22 @@ const useEventStore = create((set, get) => ({
 
   // Fetch my events (current user's submissions)
   fetchMyEvents: async () => {
+    const requestId = ++myEventsRequestId;
     set({ myEventsLoading: true, myEventsError: null, error: null });
     try {
       const events = await eventService.getMyEvents();
+      if (requestId !== myEventsRequestId) return;
       set({ myEvents: events, myEventsLoading: false, myEventsError: null });
     } catch (err) {
+      if (requestId !== myEventsRequestId) return;
       const message = err?.message || '申请记录加载失败，请重试。';
       set({ error: message, myEventsError: message, myEventsLoading: false });
     }
+  },
+
+  resetForAccountChange: () => {
+    myEventsRequestId += 1;
+    set({ myEvents: [], myEventsLoading: false, myEventsError: null });
   },
 
   // Fetch pending events (admin)

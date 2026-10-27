@@ -2,6 +2,8 @@ import { create } from 'zustand';
 import * as commentService from '../services/commentService';
 import usePostStore from './postStore';
 
+let accountGeneration = 0;
+
 function getPendingUnlikeKey(type, id) {
   return `${type}-${id}`;
 }
@@ -38,25 +40,362 @@ function applyReplyLikeState(commentsMap, commentId, replyId, patch) {
   return updated;
 }
 
+function captureLikeFields(item) {
+  return {
+    hasIsLiked: Object.prototype.hasOwnProperty.call(item, 'isLiked'),
+    isLiked: item.isLiked,
+    hasLikes: Object.prototype.hasOwnProperty.call(item, 'likes'),
+    likes: item.likes,
+  };
+}
+
+function restoreLikeFields(item, previous, optimistic) {
+  let next = item;
+  if (
+    Object.prototype.hasOwnProperty.call(item, 'isLiked')
+    && Object.is(item.isLiked, optimistic.isLiked)
+  ) {
+    next = { ...next };
+    if (previous.hasIsLiked) next.isLiked = previous.isLiked;
+    else delete next.isLiked;
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(item, 'likes')
+    && Object.is(item.likes, optimistic.likes)
+  ) {
+    if (next === item) next = { ...next };
+    if (previous.hasLikes) next.likes = previous.likes;
+    else delete next.likes;
+  }
+  return next;
+}
+
+function captureCommentLikeTargets(commentsMap, commentId) {
+  const targets = [];
+  for (const [postId, comments] of Object.entries(commentsMap)) {
+    for (const comment of comments) {
+      if (getCommentId(comment) !== commentId) continue;
+      targets.push({
+        postId,
+        commentId,
+        previous: captureLikeFields(comment),
+        optimistic: {
+          isLiked: !comment.isLiked,
+          likes: comment.isLiked ? Math.max(0, comment.likes - 1) : comment.likes + 1,
+        },
+      });
+    }
+  }
+  return targets;
+}
+
+function rollbackCommentLikeTargets(commentsMap, targets) {
+  const targetsByPost = new Map(targets.map((target) => [target.postId, target]));
+  let nextCommentsMap = commentsMap;
+  for (const [postId, target] of targetsByPost) {
+    const comments = commentsMap[postId] || [];
+    let changed = false;
+    const nextComments = comments.map((comment) => {
+      if (getCommentId(comment) !== target.commentId) return comment;
+      const restored = restoreLikeFields(comment, target.previous, target.optimistic);
+      changed ||= restored !== comment;
+      return restored;
+    });
+    if (changed) {
+      if (nextCommentsMap === commentsMap) nextCommentsMap = { ...commentsMap };
+      nextCommentsMap[postId] = nextComments;
+    }
+  }
+  return nextCommentsMap;
+}
+
+function captureReplyLikeTargets(commentsMap, commentId, replyId) {
+  const targets = [];
+  for (const [postId, comments] of Object.entries(commentsMap)) {
+    for (const comment of comments) {
+      if (getCommentId(comment) !== commentId) continue;
+      for (const reply of comment.replies || []) {
+        if (getCommentId(reply) !== replyId) continue;
+        targets.push({
+          postId,
+          commentId,
+          replyId,
+          previous: captureLikeFields(reply),
+          optimistic: {
+            isLiked: !reply.isLiked,
+            likes: reply.isLiked ? Math.max(0, (reply.likes || 0) - 1) : (reply.likes || 0) + 1,
+          },
+        });
+      }
+    }
+  }
+  return targets;
+}
+
+function rollbackReplyLikeTargets(commentsMap, targets) {
+  const targetsByPost = new Map(targets.map((target) => [target.postId, target]));
+  let nextCommentsMap = commentsMap;
+  for (const [postId, target] of targetsByPost) {
+    const comments = commentsMap[postId] || [];
+    let changed = false;
+    const nextComments = comments.map((comment) => {
+      if (getCommentId(comment) !== target.commentId) return comment;
+      let replyChanged = false;
+      const replies = (comment.replies || []).map((reply) => {
+        if (getCommentId(reply) !== target.replyId) return reply;
+        const restored = restoreLikeFields(reply, target.previous, target.optimistic);
+        replyChanged ||= restored !== reply;
+        return restored;
+      });
+      if (!replyChanged) return comment;
+      changed = true;
+      return { ...comment, replies };
+    });
+    if (changed) {
+      if (nextCommentsMap === commentsMap) nextCommentsMap = { ...commentsMap };
+      nextCommentsMap[postId] = nextComments;
+    }
+  }
+  return nextCommentsMap;
+}
+
+function getCommentId(comment) {
+  return comment?.id || comment?._id;
+}
+
+function replayCommentFetchMutation(comments, mutation) {
+  if (mutation.type === 'upsertComment') {
+    const incomingId = getCommentId(mutation.comment);
+    const existing = comments.some((comment) => getCommentId(comment) === incomingId);
+    return existing
+      ? comments.map((comment) => (
+        getCommentId(comment) === incomingId ? { ...comment, ...mutation.comment } : comment
+      ))
+      : [...comments, mutation.comment];
+  }
+
+  if (mutation.type === 'removeComment') {
+    return comments.filter((comment) => getCommentId(comment) !== mutation.commentId);
+  }
+
+  if (mutation.type === 'upsertReply') {
+    return comments.map((comment) => {
+      if (getCommentId(comment) !== mutation.commentId) return comment;
+      const replies = comment.replies || [];
+      const incomingId = getCommentId(mutation.reply);
+      const exists = replies.some((reply) => getCommentId(reply) === incomingId);
+      return {
+        ...comment,
+        replies: exists
+          ? replies.map((reply) => (
+            getCommentId(reply) === incomingId ? { ...reply, ...mutation.reply } : reply
+          ))
+          : [...replies, mutation.reply],
+      };
+    });
+  }
+
+  if (mutation.type === 'removeReply') {
+    return comments.map((comment) => (
+      getCommentId(comment) === mutation.commentId
+        ? {
+          ...comment,
+          replies: (comment.replies || []).filter(
+            (reply) => getCommentId(reply) !== mutation.replyId,
+          ),
+        }
+        : comment
+    ));
+  }
+
+  return comments;
+}
+
+function mergeFetchedReplyWithLocalChanges(startingReply, currentReply, fetchedReply) {
+  const merged = { ...fetchedReply };
+  const keys = new Set([
+    ...Object.keys(startingReply || {}),
+    ...Object.keys(currentReply || {}),
+  ]);
+
+  for (const key of keys) {
+    if (Object.is(startingReply?.[key], currentReply?.[key])) continue;
+    if (Object.prototype.hasOwnProperty.call(currentReply, key)) {
+      merged[key] = currentReply[key];
+    } else {
+      delete merged[key];
+    }
+  }
+
+  return merged;
+}
+
+function mergeFetchedRepliesWithLocalChanges(startingReplies, currentReplies, fetchedReplies) {
+  const startingById = new Map(startingReplies.map((reply) => [getCommentId(reply), reply]));
+  const currentById = new Map(currentReplies.map((reply) => [getCommentId(reply), reply]));
+  const fetchedIds = new Set(fetchedReplies.map(getCommentId));
+  const merged = [];
+
+  for (const reply of fetchedReplies) {
+    const replyId = getCommentId(reply);
+    const existedAtStart = startingById.has(replyId);
+    const current = currentById.get(replyId);
+    if (existedAtStart && !current) continue;
+    merged.push(
+      existedAtStart && current && current !== startingById.get(replyId)
+        ? mergeFetchedReplyWithLocalChanges(startingById.get(replyId), current, reply)
+        : reply,
+    );
+  }
+
+  for (const reply of currentReplies) {
+    const replyId = getCommentId(reply);
+    const changedAfterStart = !startingById.has(replyId)
+      || startingById.get(replyId) !== reply;
+    if (changedAfterStart && !fetchedIds.has(replyId)) merged.push(reply);
+  }
+
+  return merged;
+}
+
+function mergeFetchedCommentWithLocalChanges(startingComment, currentComment, fetchedComment) {
+  const merged = { ...fetchedComment };
+  const keys = new Set([
+    ...Object.keys(startingComment || {}),
+    ...Object.keys(currentComment || {}),
+  ]);
+
+  for (const key of keys) {
+    if (key === 'replies' || Object.is(startingComment?.[key], currentComment?.[key])) continue;
+    if (Object.prototype.hasOwnProperty.call(currentComment, key)) {
+      merged[key] = currentComment[key];
+    } else {
+      delete merged[key];
+    }
+  }
+
+  merged.replies = mergeFetchedRepliesWithLocalChanges(
+    startingComment?.replies || [],
+    currentComment?.replies || [],
+    fetchedComment.replies || [],
+  );
+  return merged;
+}
+
+function mergeFetchedCommentsWithLocalChanges(
+  startingComments,
+  currentComments,
+  fetchedComments,
+  fetchMutations,
+) {
+  const startingById = new Map(startingComments.map((comment) => [getCommentId(comment), comment]));
+  const currentById = new Map(currentComments.map((comment) => [getCommentId(comment), comment]));
+  const fetchedIds = new Set(fetchedComments.map(getCommentId));
+  const merged = [];
+
+  for (const comment of fetchedComments) {
+    const commentId = getCommentId(comment);
+    const existedAtStart = startingById.has(commentId);
+    const current = currentById.get(commentId);
+
+    // A missing comment was removed locally while this request was in flight.
+    if (existedAtStart && !current) continue;
+
+    // Keep an item changed locally after the request began, while using the
+    // response as the source of truth for untouched items.
+    merged.push(
+      existedAtStart && current && current !== startingById.get(commentId)
+        ? mergeFetchedCommentWithLocalChanges(startingById.get(commentId), current, comment)
+        : comment,
+    );
+  }
+
+  for (const comment of currentComments) {
+    const commentId = getCommentId(comment);
+    const changedAfterStart = !startingById.has(commentId)
+      || startingById.get(commentId) !== comment;
+    if (changedAfterStart && !fetchedIds.has(commentId)) {
+      merged.push(comment);
+    }
+  }
+
+  return fetchMutations.reduce(replayCommentFetchMutation, merged);
+}
+
+function appendFetchMutation(state, postId, mutation) {
+  const current = state.fetchMutationsByPost[postId];
+  if (!current) return state.fetchMutationsByPost;
+  return {
+    ...state.fetchMutationsByPost,
+    [postId]: [...current, mutation],
+  };
+}
+
+function clearFetchMutations(fetchMutationsByPost, postId) {
+  const next = { ...fetchMutationsByPost };
+  delete next[postId];
+  return next;
+}
+
 const useCommentStore = create((set, get) => ({
   commentsMap: {},
   loadStates: {},
   loadedPostIds: {},
+  fetchMutationsByPost: {},
   pendingCommentUnlikes: [],
   submittingCommentUnlikes: [],
 
+  resetForAccountChange: () => {
+    accountGeneration += 1;
+    set({
+      commentsMap: {},
+      loadStates: {},
+      loadedPostIds: {},
+      fetchMutationsByPost: {},
+      pendingCommentUnlikes: [],
+      submittingCommentUnlikes: [],
+    });
+  },
+
   fetchComments: async (postId) => {
     if (get().loadStates[postId]?.loading) return;
-    set((s) => ({ loadStates: { ...s.loadStates, [postId]: { loading: true, error: '' } } }));
+    const requestGeneration = accountGeneration;
+    const startingComments = get().commentsMap[postId] || [];
+    set((s) => ({
+      loadStates: { ...s.loadStates, [postId]: { loading: true, error: '' } },
+      fetchMutationsByPost: { ...s.fetchMutationsByPost, [postId]: [] },
+    }));
     try {
       const comments = await commentService.getComments(postId);
-      set((state) => ({
-        commentsMap: { ...state.commentsMap, [postId]: comments },
-        loadStates: { ...state.loadStates, [postId]: { loading: false, error: '' } },
-        loadedPostIds: { ...state.loadedPostIds, [postId]: true },
-      }));
+      if (requestGeneration !== accountGeneration) return null;
+      set((state) => {
+        const currentComments = state.commentsMap[postId] || [];
+        return {
+          commentsMap: {
+            ...state.commentsMap,
+            [postId]: mergeFetchedCommentsWithLocalChanges(
+              startingComments,
+              currentComments,
+              comments,
+              state.fetchMutationsByPost[postId] || [],
+            ),
+          },
+          loadStates: { ...state.loadStates, [postId]: { loading: false, error: '' } },
+          loadedPostIds: { ...state.loadedPostIds, [postId]: true },
+          fetchMutationsByPost: clearFetchMutations(state.fetchMutationsByPost, postId),
+        };
+      });
+      return comments;
     } catch (err) {
-      set((s) => ({ loadStates: { ...s.loadStates, [postId]: { loading: false, error: err.message || '评论加载失败，请重试。' } } }));
+      if (requestGeneration !== accountGeneration) return null;
+      set((s) => ({
+        loadStates: {
+          ...s.loadStates,
+          [postId]: { loading: false, error: err.message || '评论加载失败，请重试。' },
+        },
+        fetchMutationsByPost: clearFetchMutations(s.fetchMutationsByPost, postId),
+      }));
+      return null;
     }
   },
 
@@ -75,6 +414,10 @@ const useCommentStore = create((set, get) => ({
             : [...existing, incomingComment],
         },
         loadedPostIds: { ...state.loadedPostIds, [postId]: true },
+        fetchMutationsByPost: appendFetchMutation(state, postId, {
+          type: 'upsertComment',
+          comment: incomingComment,
+        }),
       };
     });
   },
@@ -87,6 +430,10 @@ const useCommentStore = create((set, get) => ({
           (comment) => (comment.id || comment._id) !== commentId,
         ),
       },
+      fetchMutationsByPost: appendFetchMutation(state, postId, {
+        type: 'removeComment',
+        commentId,
+      }),
     }));
   },
 
@@ -114,6 +461,11 @@ const useCommentStore = create((set, get) => ({
         }),
       },
       loadedPostIds: { ...state.loadedPostIds, [postId]: true },
+      fetchMutationsByPost: appendFetchMutation(state, postId, {
+        type: 'upsertReply',
+        commentId,
+        reply: incomingReply,
+      }),
     }));
   },
 
@@ -130,6 +482,11 @@ const useCommentStore = create((set, get) => ({
             : comment,
         ),
       },
+      fetchMutationsByPost: appendFetchMutation(state, postId, {
+        type: 'removeReply',
+        commentId,
+        replyId,
+      }),
     }));
   },
 
@@ -204,18 +561,26 @@ const useCommentStore = create((set, get) => ({
 
   togglePendingUnlike: (item) => {
     const itemKey = getPendingUnlikeKey(item.type, item.id);
-    set((state) => ({
-      pendingCommentUnlikes: state.pendingCommentUnlikes.some(
-        (pendingItem) => getPendingUnlikeKey(pendingItem.type, pendingItem.id) === itemKey,
-      )
-        ? state.pendingCommentUnlikes.filter(
-            (pendingItem) => getPendingUnlikeKey(pendingItem.type, pendingItem.id) !== itemKey,
-          )
-        : [...state.pendingCommentUnlikes, item],
-    }));
+    set((state) => {
+      const isSubmitting = state.submittingCommentUnlikes.some(
+        (submittingItem) => getPendingUnlikeKey(submittingItem.type, submittingItem.id) === itemKey,
+      );
+      if (isSubmitting) return state;
+
+      return {
+        pendingCommentUnlikes: state.pendingCommentUnlikes.some(
+          (pendingItem) => getPendingUnlikeKey(pendingItem.type, pendingItem.id) === itemKey,
+        )
+          ? state.pendingCommentUnlikes.filter(
+              (pendingItem) => getPendingUnlikeKey(pendingItem.type, pendingItem.id) !== itemKey,
+            )
+          : [...state.pendingCommentUnlikes, item],
+      };
+    });
   },
 
   submitPendingCommentUnlikes: async (items) => {
+    const requestGeneration = accountGeneration;
     const currentPending = get().pendingCommentUnlikes;
     const targetItems = (items || currentPending).filter((item) =>
       currentPending.some((pendingItem) => getPendingUnlikeKey(pendingItem.type, pendingItem.id) === getPendingUnlikeKey(item.type, item.id)),
@@ -246,14 +611,21 @@ const useCommentStore = create((set, get) => ({
     const failed = [];
 
     for (const item of uniqueTargets) {
+      if (requestGeneration !== accountGeneration) break;
       try {
         const result = item.type === 'reply'
           ? await commentService.toggleReplyLike(item.parentId, item.id)
           : await commentService.toggleLike(item.id);
+        if (requestGeneration !== accountGeneration) break;
         succeeded.push({ item, result });
       } catch (error) {
+        if (requestGeneration !== accountGeneration) break;
         failed.push({ item, error });
       }
+    }
+
+    if (requestGeneration !== accountGeneration) {
+      return { succeeded: [], failed: [] };
     }
 
     set((state) => {
@@ -287,7 +659,9 @@ const useCommentStore = create((set, get) => ({
   },
 
   addComment: async (postId, content, image = '', official = false) => {
+    const requestGeneration = accountGeneration;
     const comment = await commentService.createComment(postId, content, image, official);
+    if (requestGeneration !== accountGeneration) return comment;
     get().upsertComment(postId, comment);
     usePostStore.getState().updateCommentCount(postId, 1);
     return comment;
@@ -303,7 +677,8 @@ const useCommentStore = create((set, get) => ({
       return;
     }
 
-    const previous = get().commentsMap;
+    const requestGeneration = accountGeneration;
+    const likeTargets = captureCommentLikeTargets(get().commentsMap, commentId);
     // Optimistic update: toggle isLiked immediately
     set((state) => {
       const updated = { ...state.commentsMap };
@@ -321,7 +696,11 @@ const useCommentStore = create((set, get) => ({
       await commentService.toggleLike(commentId);
     } catch {
       // Rollback on failure
-      set({ commentsMap: previous });
+      if (requestGeneration === accountGeneration) {
+        set((state) => ({
+          commentsMap: rollbackCommentLikeTargets(state.commentsMap, likeTargets),
+        }));
+      }
     }
   },
 
@@ -335,7 +714,8 @@ const useCommentStore = create((set, get) => ({
       return;
     }
 
-    const previous = get().commentsMap;
+    const requestGeneration = accountGeneration;
+    const likeTargets = captureReplyLikeTargets(get().commentsMap, commentId, replyId);
     // Optimistic update
     set((state) => {
       const updated = { ...state.commentsMap };
@@ -364,12 +744,18 @@ const useCommentStore = create((set, get) => ({
       await commentService.toggleReplyLike(commentId, replyId);
     } catch {
       // Rollback on failure
-      set({ commentsMap: previous });
+      if (requestGeneration === accountGeneration) {
+        set((state) => ({
+          commentsMap: rollbackReplyLikeTargets(state.commentsMap, likeTargets),
+        }));
+      }
     }
   },
 
   addReply: async (commentId, content, image = '', official = false, replyToId = null) => {
+    const requestGeneration = accountGeneration;
     const reply = await commentService.addReply(commentId, content, image, official, replyToId);
+    if (requestGeneration !== accountGeneration) return reply;
     const matchingPostIds = Object.keys(get().commentsMap).filter((postId) =>
       (get().commentsMap[postId] || []).some((comment) => (comment.id || comment._id) === commentId),
     );
@@ -381,7 +767,9 @@ const useCommentStore = create((set, get) => ({
   },
 
   deleteComment: async (commentId) => {
+    const requestGeneration = accountGeneration;
     const result = await commentService.deleteComment(commentId);
+    if (requestGeneration !== accountGeneration) return result;
     usePostStore.getState().updateCommentCount(
       result.postId,
       -(1 + Math.max(0, Number(result.deletedReplyCount || 0))),
@@ -391,7 +779,9 @@ const useCommentStore = create((set, get) => ({
   },
 
   deleteReply: async (commentId, replyId) => {
+    const requestGeneration = accountGeneration;
     const result = await commentService.deleteReply(commentId, replyId);
+    if (requestGeneration !== accountGeneration) return result;
     usePostStore.getState().updateCommentCount(result.postId, -1);
     get().removeReply(result.postId, result.commentId, result.replyId);
     return result;

@@ -3,6 +3,16 @@ import useCommentStore from './commentStore';
 import usePostStore from './postStore';
 import * as commentService from '../services/commentService';
 
+function createDeferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 vi.mock('../services/commentService', () => ({
   createComment: vi.fn(),
   getComments: vi.fn(),
@@ -128,5 +138,292 @@ describe('commentStore post count sync', () => {
     expect(useCommentStore.getState().commentsMap['post-1'][0].replies).toHaveLength(0);
     expect(usePostStore.getState().selectedPost.comments).toBe(1);
     expect(usePostStore.getState().postStatsById['post-1'].comments).toBe(1);
+  });
+
+  it('merges local comment and reply changes made while a fetch is pending', async () => {
+    const request = createDeferred();
+    commentService.getComments.mockReturnValueOnce(request.promise);
+    useCommentStore.setState({
+      commentsMap: {
+        'post-1': [
+          { id: 'comment-1', content: 'before fetch', replies: [{ id: 'reply-1', content: 'old reply' }] },
+          { id: 'comment-2', content: 'removed during fetch', replies: [] },
+        ],
+      },
+    });
+
+    const fetchRequest = useCommentStore.getState().fetchComments('post-1');
+    useCommentStore.getState().upsertComment('post-1', {
+      id: 'comment-3', content: 'new local comment', replies: [],
+    });
+    useCommentStore.getState().removeComment('post-1', 'comment-2');
+    useCommentStore.getState().upsertReply('post-1', 'comment-1', {
+      id: 'reply-2', content: 'new local reply',
+    });
+    useCommentStore.getState().removeReply('post-1', 'comment-1', 'reply-1');
+
+    request.resolve([
+      { id: 'comment-1', content: 'stale response', replies: [{ id: 'reply-1', content: 'old reply' }] },
+      { id: 'comment-2', content: 'removed during fetch', replies: [] },
+      { id: 'comment-4', content: 'new server comment', replies: [] },
+    ]);
+    await fetchRequest;
+
+    const comments = useCommentStore.getState().commentsMap['post-1'];
+    expect(comments.map((comment) => comment.id)).toEqual(['comment-1', 'comment-4', 'comment-3']);
+    expect(comments[0]).toMatchObject({
+      content: 'stale response',
+      replies: [{ id: 'reply-2', content: 'new local reply' }],
+    });
+    expect(useCommentStore.getState().loadedPostIds['post-1']).toBe(true);
+  });
+
+  it('does not resurrect a comment created and deleted while the initial fetch is pending', async () => {
+    const request = createDeferred();
+    commentService.getComments.mockReturnValueOnce(request.promise);
+
+    const fetchRequest = useCommentStore.getState().fetchComments('post-1');
+    useCommentStore.getState().upsertComment('post-1', {
+      id: 'comment-1', content: 'created and removed', replies: [],
+    });
+    useCommentStore.getState().removeComment('post-1', 'comment-1');
+
+    request.resolve([{ id: 'comment-1', content: 'stale server copy', replies: [] }]);
+    await fetchRequest;
+
+    expect(useCommentStore.getState().commentsMap['post-1']).toEqual([]);
+    expect(useCommentStore.getState().fetchMutationsByPost['post-1']).toBeUndefined();
+  });
+
+  it('replays unseen comment and reply deletions over a pending fetch', async () => {
+    const request = createDeferred();
+    commentService.getComments.mockReturnValueOnce(request.promise);
+
+    const fetchRequest = useCommentStore.getState().fetchComments('post-1');
+    useCommentStore.getState().removeComment('post-1', 'deleted-comment');
+    useCommentStore.getState().removeReply('post-1', 'comment-parent', 'deleted-reply');
+
+    request.resolve([
+      { id: 'deleted-comment', content: 'stale comment', replies: [] },
+      {
+        id: 'comment-parent',
+        content: 'parent',
+        replies: [{ id: 'deleted-reply', content: 'stale reply' }],
+      },
+    ]);
+    await fetchRequest;
+
+    expect(useCommentStore.getState().commentsMap['post-1']).toEqual([
+      { id: 'comment-parent', content: 'parent', replies: [] },
+    ]);
+  });
+
+  it('replays a reply event for a parent that was not cached when fetching began', async () => {
+    const request = createDeferred();
+    commentService.getComments.mockReturnValueOnce(request.promise);
+
+    const fetchRequest = useCommentStore.getState().fetchComments('post-1');
+    useCommentStore.getState().upsertReply('post-1', 'comment-parent', {
+      id: 'reply-live', content: 'SSE reply',
+    });
+
+    request.resolve([{ id: 'comment-parent', content: 'parent', replies: [] }]);
+    await fetchRequest;
+
+    expect(useCommentStore.getState().commentsMap['post-1']).toEqual([
+      {
+        id: 'comment-parent',
+        content: 'parent',
+        replies: [{ id: 'reply-live', content: 'SSE reply' }],
+      },
+    ]);
+  });
+
+  it('keeps fetched replies alongside a local like and reply update', async () => {
+    const request = createDeferred();
+    commentService.getComments.mockReturnValueOnce(request.promise);
+    commentService.toggleLike.mockResolvedValueOnce({ liked: true, likes: 4 });
+    useCommentStore.setState({
+      commentsMap: { 'post-1': [{ id: 'comment-parent', content: 'parent', isLiked: false, likes: 2, replies: [] }] },
+    });
+
+    const fetchRequest = useCommentStore.getState().fetchComments('post-1');
+    const likeRequest = useCommentStore.getState().toggleLike('comment-parent');
+    useCommentStore.getState().upsertReply('post-1', 'comment-parent', {
+      id: 'reply-local', content: 'local reply',
+    });
+    request.resolve([{
+      id: 'comment-parent',
+      content: 'server parent',
+      isLiked: false,
+      likes: 2,
+      replies: [{ id: 'reply-server', content: 'server reply' }],
+    }]);
+    await Promise.all([fetchRequest, likeRequest]);
+
+    expect(useCommentStore.getState().commentsMap['post-1']).toEqual([{
+      id: 'comment-parent',
+      content: 'server parent',
+      isLiked: true,
+      likes: 3,
+      replies: [
+        { id: 'reply-server', content: 'server reply' },
+        { id: 'reply-local', content: 'local reply' },
+      ],
+    }]);
+  });
+
+  it('keeps fetched comments, SSE additions, replies, and other likes after a comment like fails', async () => {
+    const fetchRequest = createDeferred();
+    const likeRequest = createDeferred();
+    commentService.getComments.mockReturnValueOnce(fetchRequest.promise);
+    commentService.toggleLike
+      .mockReturnValueOnce(likeRequest.promise)
+      .mockResolvedValueOnce({ liked: true, likes: 3 });
+    useCommentStore.setState({
+      commentsMap: {
+        'post-1': [
+          {
+            id: 'comment-parent',
+            content: 'original parent',
+            isLiked: false,
+            likes: 2,
+            replies: [],
+          },
+          { id: 'comment-other', content: 'other', isLiked: false, likes: 2, replies: [] },
+        ],
+      },
+    });
+
+    const pendingFetch = useCommentStore.getState().fetchComments('post-1');
+    const failedLike = useCommentStore.getState().toggleLike('comment-parent');
+    useCommentStore.getState().upsertComment('post-1', {
+      id: 'comment-parent', content: 'edited by SSE', likes: 8,
+    });
+    useCommentStore.getState().upsertComment('post-1', {
+      id: 'comment-live', content: 'new SSE comment', replies: [],
+    });
+    useCommentStore.getState().upsertReply('post-1', 'comment-parent', {
+      id: 'reply-live', content: 'new SSE reply',
+    });
+    const otherLike = useCommentStore.getState().toggleLike('comment-other');
+
+    fetchRequest.resolve([
+      {
+        id: 'comment-parent', content: 'stale fetch parent', isLiked: false, likes: 2, replies: [],
+      },
+      { id: 'comment-other', content: 'other', isLiked: false, likes: 2, replies: [] },
+    ]);
+    await Promise.all([pendingFetch, otherLike]);
+    likeRequest.reject(new Error('like failed'));
+    await failedLike;
+
+    const comments = useCommentStore.getState().commentsMap['post-1'];
+    expect(comments.map((comment) => comment.id)).toEqual([
+      'comment-parent', 'comment-other', 'comment-live',
+    ]);
+    expect(comments[0]).toMatchObject({
+      content: 'edited by SSE',
+      isLiked: false,
+      likes: 8,
+      replies: [{ id: 'reply-live', content: 'new SSE reply' }],
+    });
+    expect(comments[1]).toMatchObject({ isLiked: true, likes: 3 });
+  });
+
+  it('rolls back only the target reply like when a reply failure arrives after SSE changes', async () => {
+    const likeRequest = createDeferred();
+    commentService.toggleReplyLike.mockReturnValueOnce(likeRequest.promise);
+    useCommentStore.setState({
+      commentsMap: {
+        'post-1': [{
+          id: 'comment-parent',
+          content: 'parent',
+          replies: [{ id: 'reply-target', content: 'reply', isLiked: false, likes: 1 }],
+        }],
+      },
+    });
+
+    const failedLike = useCommentStore.getState().toggleReplyLike('comment-parent', 'reply-target');
+    useCommentStore.getState().upsertReply('post-1', 'comment-parent', {
+      id: 'reply-target', content: 'edited by SSE', likes: 7,
+    });
+    useCommentStore.getState().upsertReply('post-1', 'comment-parent', {
+      id: 'reply-live', content: 'new SSE reply',
+    });
+    useCommentStore.getState().upsertComment('post-1', {
+      id: 'comment-live', content: 'new SSE comment', replies: [],
+    });
+
+    likeRequest.reject(new Error('reply like failed'));
+    await failedLike;
+
+    const comments = useCommentStore.getState().commentsMap['post-1'];
+    expect(comments.map((comment) => comment.id)).toEqual(['comment-parent', 'comment-live']);
+    expect(comments[0].replies).toEqual([
+      { id: 'reply-target', content: 'edited by SSE', isLiked: false, likes: 7 },
+      { id: 'reply-live', content: 'new SSE reply' },
+    ]);
+  });
+
+  it('clears account-scoped comments and ignores a fetch started for the prior account', async () => {
+    const request = createDeferred();
+    commentService.getComments.mockReturnValueOnce(request.promise);
+    const fetchRequest = useCommentStore.getState().fetchComments('post-1');
+
+    useCommentStore.getState().resetForAccountChange();
+    request.resolve([{ id: 'old-user-comment', content: 'private', replies: [] }]);
+    await fetchRequest;
+
+    expect(useCommentStore.getState().commentsMap).toEqual({});
+    expect(useCommentStore.getState().loadedPostIds).toEqual({});
+    expect(useCommentStore.getState().loadStates).toEqual({});
+    expect(useCommentStore.getState().fetchMutationsByPost).toEqual({});
+  });
+
+  it('keeps an untouched fetch authoritative and allows a failed load to retry', async () => {
+    commentService.getComments
+      .mockRejectedValueOnce(new Error('网络失败'))
+      .mockResolvedValueOnce([{ id: 'server-comment', content: '最新评论', replies: [] }]);
+    useCommentStore.setState({
+      commentsMap: { 'post-1': [{ id: 'old-comment', content: '旧评论', replies: [] }] },
+    });
+
+    await useCommentStore.getState().fetchComments('post-1');
+    expect(useCommentStore.getState().loadStates['post-1']).toEqual({
+      loading: false,
+      error: '网络失败',
+    });
+
+    await useCommentStore.getState().fetchComments('post-1');
+    expect(useCommentStore.getState().commentsMap['post-1']).toEqual([
+      { id: 'server-comment', content: '最新评论', replies: [] },
+    ]);
+    expect(commentService.getComments).toHaveBeenCalledTimes(2);
+    expect(useCommentStore.getState().loadStates['post-1']).toEqual({ loading: false, error: '' });
+  });
+
+  it('does not requeue a comment unlike while its request is in flight', async () => {
+    const request = createDeferred();
+    commentService.toggleLike.mockReturnValueOnce(request.promise);
+    const item = { type: 'comment', id: 'comment-1', parentId: null };
+    useCommentStore.setState({
+      commentsMap: { 'post-1': [{ id: 'comment-1', isLiked: true, likes: 1, replies: [] }] },
+      pendingCommentUnlikes: [item],
+    });
+
+    const submitRequest = useCommentStore.getState().submitPendingCommentUnlikes();
+    expect(useCommentStore.getState().submittingCommentUnlikes).toEqual([item]);
+    useCommentStore.getState().togglePendingUnlike(item);
+    expect(useCommentStore.getState().pendingCommentUnlikes).toEqual([]);
+
+    request.resolve({ liked: false, likes: 0 });
+    await submitRequest;
+
+    expect(useCommentStore.getState().commentsMap['post-1'][0]).toMatchObject({
+      isLiked: false,
+      likes: 0,
+    });
+    expect(useCommentStore.getState().pendingCommentUnlikes).toEqual([]);
   });
 });

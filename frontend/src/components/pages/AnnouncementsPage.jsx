@@ -74,6 +74,7 @@ function AnnouncementsPage({ showToast }) {
   const fetchMyEvents = useEventStore((s) => s.fetchMyEvents);
   const submitEvent = useEventStore((s) => s.submitEvent);
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  const currentUserId = useAuthStore((s) => s.user?._id);
   const query = useUiStore((s) => s.query);
 
   // Fetch events on mount
@@ -82,7 +83,7 @@ function AnnouncementsPage({ showToast }) {
     if (isAuthenticated) {
       fetchMyEvents();
     }
-  }, [fetchPublicEvents, fetchMyEvents, isAuthenticated]);
+  }, [fetchPublicEvents, fetchMyEvents, isAuthenticated, currentUserId]);
 
   useEffect(() => () => {
     if (posterPreviewUrlRef.current) {
