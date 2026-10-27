@@ -130,6 +130,8 @@ describe('AnnouncementsPage multiline content rendering', () => {
     fireEvent.click(getByRole('button', { name: '提交申请' }));
 
     expect(submitEvent).toHaveBeenCalledTimes(1);
+    // datetime-local is interpreted in the browser's timezone before sending.
+    expect(submitEvent.mock.calls[0][0].time).toBe(new Date(2027, 0, 1, 12).toISOString());
     expect(getByRole('button', { name: '正在提交…' })).toBeDisabled();
     expect(getByLabelText('活动名称')).toBeDisabled();
     expect(getByRole('button', { name: '取消' })).toBeDisabled();

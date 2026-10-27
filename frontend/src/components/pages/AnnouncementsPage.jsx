@@ -169,13 +169,10 @@ function AnnouncementsPage({ showToast }) {
     if (!newEvent.title.trim() || !newEvent.place.trim() || !newEvent.time.trim() || !newEvent.applicantName.trim() || !newEvent.applicantStudentId.trim() || !newEvent.applicantPhone.trim() || !newEvent.applicantQQ.trim()) return;
 
     // Validate event time is in the future
-    if (newEvent.time) {
-      const eventTime = new Date(newEvent.time);
-      const now = new Date();
-      if (eventTime <= now) {
-        setSubmitError('活动时间必须在现在之后。');
-        return;
-      }
+    const eventTime = new Date(newEvent.time);
+    if (eventTime <= new Date()) {
+      setSubmitError('活动时间必须在现在之后。');
+      return;
     }
 
     submitPendingRef.current = true;
@@ -185,7 +182,7 @@ function AnnouncementsPage({ showToast }) {
       await submitEvent({
         title: newEvent.title,
         place: newEvent.place,
-        time: newEvent.time,
+        time: eventTime.toISOString(),
         type: newEvent.type,
         description: newEvent.description,
         image: newEvent.poster,
