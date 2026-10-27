@@ -238,6 +238,8 @@ cookie 需要额外的跨域配置。推荐让两者同源，生产环境用反�
 | [docs/wiki/setup.md](docs/wiki/setup.md) | 环境搭建与常见问题 |
 | [docs/wiki/architecture.md](docs/wiki/architecture.md) | 架构、SSE、登录态与约束 |
 | [docs/frontend-redesign.md](docs/frontend-redesign.md) | 人机交互改版说明与验证记录 |
+| [docs/bug-audit-2026-10-26.md](docs/bug-audit-2026-10-26.md) | 原有业务缺陷修复与回归验证 |
+| [docs/regression-review-2026-10-27.md](docs/regression-review-2026-10-27.md) | 后续回归复查、原有设计保留与 AI 会话行为 |
 | [docs/image-storage.md](docs/image-storage.md) | 图片文件存储、权限、旧数据迁移与备份 |
 | [docs/design/product-brief.md](docs/design/product-brief.md) | 产品定位、用户与设计原则 |
 | [docs/design/ui-spec.md](docs/design/ui-spec.md) | 界面规范：色彩、排版、组件与交互 |
