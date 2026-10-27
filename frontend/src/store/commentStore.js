@@ -163,6 +163,21 @@ function getCommentId(comment) {
   return comment?.id || comment?._id;
 }
 
+function hasComment(commentsMap, postId, commentId) {
+  return (commentsMap[postId] || []).some((comment) => getCommentId(comment) === commentId);
+}
+
+function hasReply(commentsMap, postId, commentId, replyId) {
+  const comment = (commentsMap[postId] || []).find(
+    (item) => getCommentId(item) === commentId,
+  );
+  return (comment?.replies || []).some((reply) => getCommentId(reply) === replyId);
+}
+
+function countVisibleComments(comments) {
+  return comments.reduce((count, comment) => count + 1 + (comment.replies || []).length, 0);
+}
+
 function replayCommentFetchMutation(comments, mutation) {
   if (mutation.type === 'upsertComment') {
     const incomingId = getCommentId(mutation.comment);
@@ -368,22 +383,27 @@ const useCommentStore = create((set, get) => ({
     try {
       const comments = await commentService.getComments(postId);
       if (requestGeneration !== accountGeneration) return null;
+      let mergedComments;
       set((state) => {
         const currentComments = state.commentsMap[postId] || [];
+        mergedComments = mergeFetchedCommentsWithLocalChanges(
+          startingComments,
+          currentComments,
+          comments,
+          state.fetchMutationsByPost[postId] || [],
+        );
         return {
           commentsMap: {
             ...state.commentsMap,
-            [postId]: mergeFetchedCommentsWithLocalChanges(
-              startingComments,
-              currentComments,
-              comments,
-              state.fetchMutationsByPost[postId] || [],
-            ),
+            [postId]: mergedComments,
           },
           loadStates: { ...state.loadStates, [postId]: { loading: false, error: '' } },
           loadedPostIds: { ...state.loadedPostIds, [postId]: true },
           fetchMutationsByPost: clearFetchMutations(state.fetchMutationsByPost, postId),
         };
+      });
+      usePostStore.getState().applyRealtimePostStats(postId, {
+        comments: countVisibleComments(mergedComments),
       });
       return comments;
     } catch (err) {
@@ -662,8 +682,11 @@ const useCommentStore = create((set, get) => ({
     const requestGeneration = accountGeneration;
     const comment = await commentService.createComment(postId, content, image, official);
     if (requestGeneration !== accountGeneration) return comment;
+    const alreadyPresent = hasComment(get().commentsMap, postId, getCommentId(comment));
     get().upsertComment(postId, comment);
-    usePostStore.getState().updateCommentCount(postId, 1);
+    if (!alreadyPresent) {
+      usePostStore.getState().updateCommentCount(postId, 1);
+    }
     return comment;
   },
 
@@ -760,8 +783,11 @@ const useCommentStore = create((set, get) => ({
       (get().commentsMap[postId] || []).some((comment) => (comment.id || comment._id) === commentId),
     );
     for (const postId of matchingPostIds) {
+      const alreadyPresent = hasReply(get().commentsMap, postId, commentId, getCommentId(reply));
       get().upsertReply(postId, commentId, reply);
-      usePostStore.getState().updateCommentCount(postId, 1);
+      if (!alreadyPresent) {
+        usePostStore.getState().updateCommentCount(postId, 1);
+      }
     }
     return reply;
   },
@@ -770,10 +796,13 @@ const useCommentStore = create((set, get) => ({
     const requestGeneration = accountGeneration;
     const result = await commentService.deleteComment(commentId);
     if (requestGeneration !== accountGeneration) return result;
-    usePostStore.getState().updateCommentCount(
-      result.postId,
-      -(1 + Math.max(0, Number(result.deletedReplyCount || 0))),
-    );
+    const wasPresent = hasComment(get().commentsMap, result.postId, result.commentId);
+    if (wasPresent) {
+      usePostStore.getState().updateCommentCount(
+        result.postId,
+        -(1 + Math.max(0, Number(result.deletedReplyCount || 0))),
+      );
+    }
     get().removeComment(result.postId, result.commentId);
     return result;
   },
@@ -782,7 +811,15 @@ const useCommentStore = create((set, get) => ({
     const requestGeneration = accountGeneration;
     const result = await commentService.deleteReply(commentId, replyId);
     if (requestGeneration !== accountGeneration) return result;
-    usePostStore.getState().updateCommentCount(result.postId, -1);
+    const wasPresent = hasReply(
+      get().commentsMap,
+      result.postId,
+      result.commentId,
+      result.replyId,
+    );
+    if (wasPresent) {
+      usePostStore.getState().updateCommentCount(result.postId, -1);
+    }
     get().removeReply(result.postId, result.commentId, result.replyId);
     return result;
   },

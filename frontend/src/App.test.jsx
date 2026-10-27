@@ -10,6 +10,7 @@ import useNotificationStore from './store/notificationStore';
 import usePostStore from './store/postStore';
 import useUiStore from './store/uiStore';
 import * as eventService from './services/eventService';
+import * as commentService from './services/commentService';
 
 const { restoreSession, fetchPostById } = vi.hoisted(() => ({
   restoreSession: vi.fn(),
@@ -88,6 +89,11 @@ vi.mock('./services/reportService', () => ({
 vi.mock('./services/eventService', () => ({
   getPublicEvents: vi.fn().mockResolvedValue([]),
   getMyEvents: vi.fn().mockResolvedValue([]),
+}));
+
+vi.mock('./services/commentService', async () => ({
+  ...await vi.importActual('./services/commentService'),
+  getComments: vi.fn(),
 }));
 
 vi.mock('./components/common/Toast', () => ({
@@ -381,6 +387,39 @@ describe('App detail deletion flow', () => {
     await waitFor(() => expect(screen.getByTestId('detail-post-id')).toHaveTextContent('post-1'));
     expect(window.location.pathname).toBe('/detail/post-1');
     expect(fetchPostById).toHaveBeenCalledWith('post-1');
+  });
+
+  it.each(['comment', 'reply'])('keeps %s events received during the first inline discussion load', async (kind) => {
+    window.history.replaceState({}, '', '/');
+    useUiStore.setState({ activePage: 'home' });
+    usePostStore.setState({ selectedPost: null, posts: [{ id: 'post-1', comments: 0 }] });
+    let resolveComments;
+    commentService.getComments.mockReturnValueOnce(new Promise((resolve) => { resolveComments = resolve; }));
+    useCommentStore.setState({ fetchComments: useCommentStore.getInitialState().fetchComments });
+    render(<App />);
+    let pending;
+    act(() => { pending = useCommentStore.getState().fetchComments('post-1'); });
+
+    const es = MockEventSource.instances[0];
+    const parent = { id: 'comment-1', content: 'parent', replies: [] };
+    act(() => {
+      if (kind === 'comment') {
+        es.emit('comment-created', { postId: 'post-1', comment: parent });
+      } else {
+        es.emit('reply-created', { postId: 'post-1', commentId: parent.id, reply: { id: 'reply-1', content: 'reply' } });
+      }
+      es.emit('post-stats-updated', { postId: 'post-1', comments: kind === 'comment' ? 1 : 2 });
+      es.emit('comment-created', { postId: 'unopened-post', comment: { id: 'unrelated', replies: [] } });
+    });
+    await act(async () => {
+      resolveComments(kind === 'comment' ? [] : [parent]);
+      await pending;
+    });
+
+    const expected = kind === 'comment' ? 1 : 2;
+    expect(useCommentStore.getState().getFlatComments('post-1')).toHaveLength(expected);
+    expect(usePostStore.getState().posts[0].comments).toBe(expected);
+    expect(useCommentStore.getState().commentsMap['unopened-post']).toBeUndefined();
   });
 
   it('deduplicates comment-created SSE updates and increments count once', async () => {

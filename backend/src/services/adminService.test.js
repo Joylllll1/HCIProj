@@ -204,8 +204,8 @@ test('admin deletion broadcasts comment removal and updated comment count', asyn
   await deleteComment(commentId, 'admin', '原因');
 
   assert.deepEqual(events(), [
-    { event: 'post-stats-updated', data: { postId, comments: 0 } },
     { event: 'comment-deleted', data: { postId, commentId, deletedReplyCount: 1 } },
+    { event: 'post-stats-updated', data: { postId, comments: 0 } },
   ]);
 });
 
@@ -230,8 +230,8 @@ test('admin deletion broadcasts reply removal', async (t) => {
   await deleteComment(replyId, 'admin', '原因');
 
   assert.deepEqual(events(), [
-    { event: 'post-stats-updated', data: { postId, comments: 0 } },
     { event: 'reply-deleted', data: { postId, commentId, replyId } },
+    { event: 'post-stats-updated', data: { postId, comments: 0 } },
   ]);
 });
 

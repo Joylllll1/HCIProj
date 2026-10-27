@@ -76,11 +76,11 @@ export const createComment = async (userId, postId, content, image = '', officia
   });
 
   try {
-    broadcastPostCommentStats(postId, visibleCommentCount);
     broadcast('comment-created', {
       postId: postId.toString(),
       comment: commentDto,
     });
+    broadcastPostCommentStats(postId, visibleCommentCount);
   } catch (error) {
     console.error('SSE broadcast failed after comment creation:', error);
   }
@@ -136,12 +136,12 @@ export const addReply = async (userId, commentId, content, image = '', official 
   });
 
   try {
-    broadcastPostCommentStats(comment.postId, visibleCommentCount);
     broadcast('reply-created', {
       postId: comment.postId.toString(),
       commentId: comment._id.toString(),
       reply: replyDto,
     });
+    broadcastPostCommentStats(comment.postId, visibleCommentCount);
   } catch (error) {
     console.error('SSE broadcast failed after reply creation:', error);
   }
@@ -194,8 +194,8 @@ export const deleteComment = async (userId, commentId) => {
   };
 
   try {
-    broadcastPostCommentStats(comment.postId, visibleCommentCount);
     broadcast('comment-deleted', result);
+    broadcastPostCommentStats(comment.postId, visibleCommentCount);
   } catch (error) {
     console.error('SSE broadcast failed after comment deletion:', error);
   }
@@ -226,8 +226,8 @@ export const deleteReply = async (userId, commentId, replyId) => {
   };
 
   try {
-    broadcastPostCommentStats(comment.postId, visibleCommentCount);
     broadcast('reply-deleted', result);
+    broadcastPostCommentStats(comment.postId, visibleCommentCount);
   } catch (error) {
     console.error('SSE broadcast failed after reply deletion:', error);
   }

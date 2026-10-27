@@ -180,6 +180,12 @@ test('comment and reply responses and SSE events serialize stored image referenc
   const events = eventList();
   const commentEvent = events.find(({ event }) => event === 'comment-created').data.comment;
   const replyEvent = events.find(({ event }) => event === 'reply-created').data.reply;
+  assert.deepEqual(events.map(({ event }) => event), [
+    'comment-created',
+    'post-stats-updated',
+    'reply-created',
+    'post-stats-updated',
+  ]);
 
   assert.match(createdComment.image, /^\/api\/media\/comments\/[a-f0-9]{24}\?v=/);
   assert.equal(commentEvent.image, createdComment.image);
@@ -196,6 +202,46 @@ test('comment and reply responses and SSE events serialize stored image referenc
   assert.equal(fetched[0].image, createdComment.image);
   assert.equal(fetched[0].replies[0].image, createdReply.image);
   assert.equal(JSON.stringify(fetched).includes('file:'), false);
+});
+
+test('public comment deletions broadcast removal before the authoritative count', async (t) => {
+  const eventList = captureEvents(t);
+  mockCommentCountSync();
+  mock.method(Post, 'exists', async () => true);
+
+  const commentReplies = [];
+  const comment = {
+    _id: new mongoose.Types.ObjectId(commentId),
+    postId: new mongoose.Types.ObjectId(postId),
+    ownerUserId: 'owner',
+    replies: commentReplies,
+    save: async () => {},
+  };
+  const reply = {
+    _id: new mongoose.Types.ObjectId(replyId),
+    ownerUserId: 'owner',
+    isDeleted: false,
+  };
+  const replyList = [reply];
+  replyList.id = (id) => replyList.find((item) => item._id.toString() === id.toString());
+  const parentComment = {
+    _id: new mongoose.Types.ObjectId(commentId),
+    postId: new mongoose.Types.ObjectId(postId),
+    replies: replyList,
+    save: async () => {},
+  };
+  const findTargets = [comment, parentComment];
+  mock.method(Comment, 'findOne', async () => findTargets.shift());
+
+  await deleteComment('owner', commentId);
+  await deleteReply('owner', commentId, replyId);
+
+  assert.deepEqual(eventList().map(({ event }) => event), [
+    'comment-deleted',
+    'post-stats-updated',
+    'reply-deleted',
+    'post-stats-updated',
+  ]);
 });
 
 test('public comment reads and writes reject a deleted parent post', async () => {

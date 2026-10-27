@@ -13,6 +13,20 @@ function createDeferred() {
   return { promise, resolve, reject };
 }
 
+function setPostCommentCount(postId, comments) {
+  const post = { id: postId, comments };
+  usePostStore.setState({
+    posts: [post],
+    myPosts: [post],
+    selectedPost: post,
+    postStatsById: { [postId]: { likes: 0, saves: 0, comments } },
+  });
+}
+
+function applyCommentCountEvent(postId, comments) {
+  usePostStore.getState().applyRealtimePostStats(postId, { comments });
+}
+
 vi.mock('../services/commentService', () => ({
   createComment: vi.fn(),
   getComments: vi.fn(),
@@ -51,6 +65,31 @@ describe('commentStore post count sync', () => {
     expect(usePostStore.getState().postStatsById['post-1'].comments).toBe(2);
   });
 
+  it('syncs a pending comment creation from GET before its HTTP response', async () => {
+    const createRequest = createDeferred();
+    const fetchRequest = createDeferred();
+    commentService.createComment.mockReturnValueOnce(createRequest.promise);
+    commentService.getComments.mockReturnValueOnce(fetchRequest.promise);
+    useCommentStore.setState({
+      commentsMap: { 'post-1': [{ id: 'comment-old', replies: [] }] },
+    });
+    setPostCommentCount('post-1', 1);
+
+    const creating = useCommentStore.getState().addComment('post-1', 'new comment');
+    const fetching = useCommentStore.getState().fetchComments('post-1');
+    fetchRequest.resolve([
+      { id: 'comment-old', replies: [] },
+      { id: 'comment-new', replies: [] },
+    ]);
+    await fetching;
+
+    expect(usePostStore.getState().posts[0].comments).toBe(2);
+    createRequest.resolve({ id: 'comment-new', replies: [] });
+    await creating;
+
+    expect(usePostStore.getState().posts[0].comments).toBe(2);
+  });
+
   it('increments post comment count after creating a reply', async () => {
     commentService.addReply.mockResolvedValueOnce({
       id: 'reply-1',
@@ -74,6 +113,33 @@ describe('commentStore post count sync', () => {
     expect(useCommentStore.getState().commentsMap['post-1'][0].replies).toHaveLength(1);
     expect(usePostStore.getState().selectedPost.comments).toBe(2);
     expect(usePostStore.getState().postStatsById['post-1'].comments).toBe(2);
+  });
+
+  it('syncs a pending reply creation from GET before its HTTP response', async () => {
+    const createRequest = createDeferred();
+    const fetchRequest = createDeferred();
+    commentService.addReply.mockReturnValueOnce(createRequest.promise);
+    commentService.getComments.mockReturnValueOnce(fetchRequest.promise);
+    useCommentStore.setState({
+      commentsMap: {
+        'post-1': [{ id: 'comment-1', replies: [{ id: 'reply-old' }] }],
+      },
+    });
+    setPostCommentCount('post-1', 2);
+
+    const creating = useCommentStore.getState().addReply('comment-1', 'new reply');
+    const fetching = useCommentStore.getState().fetchComments('post-1');
+    fetchRequest.resolve([{
+      id: 'comment-1',
+      replies: [{ id: 'reply-old' }, { id: 'reply-new' }],
+    }]);
+    await fetching;
+
+    expect(usePostStore.getState().posts[0].comments).toBe(3);
+    createRequest.resolve({ id: 'reply-new' });
+    await creating;
+
+    expect(usePostStore.getState().posts[0].comments).toBe(3);
   });
 
   it('decrements post comment count by deleted comment subtree size', async () => {
@@ -108,6 +174,35 @@ describe('commentStore post count sync', () => {
     expect(usePostStore.getState().postStatsById['post-1'].comments).toBe(0);
   });
 
+  it('syncs a pending comment deletion from GET before its HTTP response', async () => {
+    const deleteRequest = createDeferred();
+    const fetchRequest = createDeferred();
+    commentService.deleteComment.mockReturnValueOnce(deleteRequest.promise);
+    commentService.getComments.mockReturnValueOnce(fetchRequest.promise);
+    useCommentStore.setState({
+      commentsMap: {
+        'post-1': [
+          { id: 'comment-delete', replies: [{ id: 'reply-delete' }] },
+          { id: 'comment-keep', replies: [] },
+        ],
+      },
+    });
+    setPostCommentCount('post-1', 3);
+
+    const deleting = useCommentStore.getState().deleteComment('comment-delete');
+    const fetching = useCommentStore.getState().fetchComments('post-1');
+    fetchRequest.resolve([{ id: 'comment-keep', replies: [] }]);
+    await fetching;
+
+    expect(usePostStore.getState().posts[0].comments).toBe(1);
+    deleteRequest.resolve({
+      postId: 'post-1', commentId: 'comment-delete', deletedReplyCount: 1,
+    });
+    await deleting;
+
+    expect(usePostStore.getState().posts[0].comments).toBe(1);
+  });
+
   it('decrements post comment count after deleting a reply', async () => {
     commentService.deleteReply.mockResolvedValueOnce({
       postId: 'post-1',
@@ -138,6 +233,205 @@ describe('commentStore post count sync', () => {
     expect(useCommentStore.getState().commentsMap['post-1'][0].replies).toHaveLength(0);
     expect(usePostStore.getState().selectedPost.comments).toBe(1);
     expect(usePostStore.getState().postStatsById['post-1'].comments).toBe(1);
+  });
+
+  it('syncs a pending reply deletion from GET before its HTTP response', async () => {
+    const deleteRequest = createDeferred();
+    const fetchRequest = createDeferred();
+    commentService.deleteReply.mockReturnValueOnce(deleteRequest.promise);
+    commentService.getComments.mockReturnValueOnce(fetchRequest.promise);
+    useCommentStore.setState({
+      commentsMap: {
+        'post-1': [{
+          id: 'comment-1',
+          replies: [{ id: 'reply-delete' }, { id: 'reply-keep' }],
+        }],
+      },
+    });
+    setPostCommentCount('post-1', 3);
+
+    const deleting = useCommentStore.getState().deleteReply('comment-1', 'reply-delete');
+    const fetching = useCommentStore.getState().fetchComments('post-1');
+    fetchRequest.resolve([{
+      id: 'comment-1',
+      replies: [{ id: 'reply-keep' }],
+    }]);
+    await fetching;
+
+    expect(usePostStore.getState().posts[0].comments).toBe(2);
+    deleteRequest.resolve({
+      postId: 'post-1', commentId: 'comment-1', replyId: 'reply-delete',
+    });
+    await deleting;
+
+    expect(usePostStore.getState().posts[0].comments).toBe(2);
+  });
+
+  it('keeps the count correct when the create event, HTTP response, and stats arrive in sequence', async () => {
+    const request = createDeferred();
+    commentService.createComment.mockReturnValueOnce(request.promise);
+    setPostCommentCount('post-1', 1);
+
+    const createRequest = useCommentStore.getState().addComment('post-1', 'hello');
+    useCommentStore.getState().upsertComment('post-1', {
+      id: 'comment-1', content: 'hello', replies: [],
+    });
+    useCommentStore.getState().upsertComment('post-1', {
+      id: 'comment-1', content: 'hello', replies: [],
+    });
+    request.resolve({ id: 'comment-1', content: 'hello', replies: [] });
+    await createRequest;
+
+    expect(useCommentStore.getState().commentsMap['post-1']).toHaveLength(1);
+    expect(usePostStore.getState().posts[0].comments).toBe(1);
+    applyCommentCountEvent('post-1', 2);
+    expect(usePostStore.getState().posts[0].comments).toBe(2);
+  });
+
+  it('does not count a comment twice when its create event and stats arrive before HTTP', async () => {
+    const request = createDeferred();
+    commentService.createComment.mockReturnValueOnce(request.promise);
+    setPostCommentCount('post-1', 1);
+
+    const createRequest = useCommentStore.getState().addComment('post-1', 'hello');
+    useCommentStore.getState().upsertComment('post-1', {
+      id: 'comment-1', content: 'hello', replies: [],
+    });
+    applyCommentCountEvent('post-1', 2);
+    request.resolve({ id: 'comment-1', content: 'hello', replies: [] });
+    await createRequest;
+
+    expect(useCommentStore.getState().commentsMap['post-1']).toHaveLength(1);
+    expect(usePostStore.getState().posts[0].comments).toBe(2);
+  });
+
+  it('keeps the immediate HTTP count when HTTP precedes the create event and stats', async () => {
+    const request = createDeferred();
+    commentService.addReply.mockReturnValueOnce(request.promise);
+    useCommentStore.setState({
+      commentsMap: {
+        'post-1': [{ id: 'comment-1', content: 'parent', replies: [] }],
+      },
+    });
+    setPostCommentCount('post-1', 1);
+
+    const createRequest = useCommentStore.getState().addReply('comment-1', 'reply');
+    request.resolve({ id: 'reply-1', content: 'reply' });
+    await createRequest;
+
+    expect(usePostStore.getState().posts[0].comments).toBe(2);
+    useCommentStore.getState().upsertReply('post-1', 'comment-1', {
+      id: 'reply-1', content: 'reply',
+    });
+    useCommentStore.getState().upsertReply('post-1', 'comment-1', {
+      id: 'reply-1', content: 'reply',
+    });
+    applyCommentCountEvent('post-1', 2);
+    expect(usePostStore.getState().posts[0].comments).toBe(2);
+  });
+
+  it('does not decrement a deleted comment subtree twice when SSE precedes HTTP', async () => {
+    const request = createDeferred();
+    commentService.deleteComment.mockReturnValueOnce(request.promise);
+    useCommentStore.setState({
+      commentsMap: {
+        'post-1': [{
+          id: 'comment-1',
+          replies: [{ id: 'reply-1' }, { id: 'reply-2' }],
+        }],
+      },
+    });
+    setPostCommentCount('post-1', 3);
+
+    const deleteRequest = useCommentStore.getState().deleteComment('comment-1');
+    useCommentStore.getState().removeComment('post-1', 'comment-1');
+    useCommentStore.getState().removeComment('post-1', 'comment-1');
+    applyCommentCountEvent('post-1', 0);
+    request.resolve({
+      postId: 'post-1', commentId: 'comment-1', deletedReplyCount: 2,
+    });
+    await deleteRequest;
+
+    expect(useCommentStore.getState().commentsMap['post-1']).toEqual([]);
+    expect(usePostStore.getState().posts[0].comments).toBe(0);
+  });
+
+  it('decrements a deleted reply once when HTTP precedes SSE stats', async () => {
+    const request = createDeferred();
+    commentService.deleteReply.mockReturnValueOnce(request.promise);
+    useCommentStore.setState({
+      commentsMap: {
+        'post-1': [{ id: 'comment-1', replies: [{ id: 'reply-1' }] }],
+      },
+    });
+    setPostCommentCount('post-1', 2);
+
+    const deleteRequest = useCommentStore.getState().deleteReply('comment-1', 'reply-1');
+    request.resolve({ postId: 'post-1', commentId: 'comment-1', replyId: 'reply-1' });
+    await deleteRequest;
+    useCommentStore.getState().removeReply('post-1', 'comment-1', 'reply-1');
+    applyCommentCountEvent('post-1', 1);
+
+    expect(useCommentStore.getState().commentsMap['post-1'][0].replies).toEqual([]);
+    expect(usePostStore.getState().posts[0].comments).toBe(1);
+  });
+
+  it('does not decrement a reply twice when its delete event precedes HTTP', async () => {
+    const request = createDeferred();
+    commentService.deleteReply.mockReturnValueOnce(request.promise);
+    useCommentStore.setState({
+      commentsMap: {
+        'post-1': [{ id: 'comment-1', replies: [{ id: 'reply-1' }] }],
+      },
+    });
+    setPostCommentCount('post-1', 2);
+
+    const deleteRequest = useCommentStore.getState().deleteReply('comment-1', 'reply-1');
+    useCommentStore.getState().removeReply('post-1', 'comment-1', 'reply-1');
+    useCommentStore.getState().removeReply('post-1', 'comment-1', 'reply-1');
+    applyCommentCountEvent('post-1', 1);
+    request.resolve({ postId: 'post-1', commentId: 'comment-1', replyId: 'reply-1' });
+    await deleteRequest;
+
+    expect(useCommentStore.getState().commentsMap['post-1'][0].replies).toEqual([]);
+    expect(usePostStore.getState().posts[0].comments).toBe(1);
+  });
+
+  it('ignores comment mutation completions from an earlier account', async () => {
+    const createCommentRequest = createDeferred();
+    const addReplyRequest = createDeferred();
+    const deleteCommentRequest = createDeferred();
+    const deleteReplyRequest = createDeferred();
+    commentService.createComment.mockReturnValueOnce(createCommentRequest.promise);
+    commentService.addReply.mockReturnValueOnce(addReplyRequest.promise);
+    commentService.deleteComment.mockReturnValueOnce(deleteCommentRequest.promise);
+    commentService.deleteReply.mockReturnValueOnce(deleteReplyRequest.promise);
+    useCommentStore.setState({
+      commentsMap: {
+        'post-1': [{ id: 'comment-1', replies: [{ id: 'reply-1' }] }],
+      },
+    });
+    setPostCommentCount('post-1', 3);
+
+    const requests = [
+      useCommentStore.getState().addComment('post-1', 'old account'),
+      useCommentStore.getState().addReply('comment-1', 'old reply'),
+      useCommentStore.getState().deleteComment('comment-1'),
+      useCommentStore.getState().deleteReply('comment-1', 'reply-1'),
+    ];
+    useCommentStore.getState().resetForAccountChange();
+    setPostCommentCount('post-1', 7);
+
+    createCommentRequest.resolve({ id: 'old-comment', replies: [] });
+    addReplyRequest.resolve({ id: 'old-reply' });
+    deleteCommentRequest.resolve({
+      postId: 'post-1', commentId: 'comment-1', deletedReplyCount: 1,
+    });
+    deleteReplyRequest.resolve({ postId: 'post-1', commentId: 'comment-1', replyId: 'reply-1' });
+    await Promise.all(requests);
+
+    expect(useCommentStore.getState().commentsMap).toEqual({});
+    expect(usePostStore.getState().posts[0].comments).toBe(7);
   });
 
   it('merges local comment and reply changes made while a fetch is pending', async () => {

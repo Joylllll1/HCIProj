@@ -53,11 +53,11 @@ async function resolveAssociatedPostId(targetId, targetType) {
 
 function broadcastAdminCommentDeletion(event, result, comments) {
   try {
+    broadcast(event, result);
     broadcast('post-stats-updated', {
       postId: result.postId,
       comments: Math.max(0, comments || 0),
     });
-    broadcast(event, result);
   } catch (error) {
     console.error('SSE broadcast failed after admin comment deletion:', error);
   }

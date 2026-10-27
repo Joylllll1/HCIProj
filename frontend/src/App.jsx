@@ -299,8 +299,9 @@ function App() {
       const parseCurrentPostEvent = (event) => {
         try {
           const data = JSON.parse(event.data || '{}');
-          const loaded = useCommentStore.getState().loadedPostIds[data.postId];
-          return ((activePage === 'detail' && data.postId === currentPostId) || loaded) ? data : null;
+          const commentState = useCommentStore.getState();
+          const relevant = commentState.loadedPostIds[data.postId] || commentState.loadStates[data.postId]?.loading;
+          return ((activePage === 'detail' && data.postId === currentPostId) || relevant) ? data : null;
         } catch {
           return null;
         }
