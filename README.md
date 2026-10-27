@@ -202,7 +202,7 @@ cd frontend && npm test && npm run lint && npm run build
 cd backend && npm test && npm run lint
 ```
 
-前端用 Vitest + Testing Library 覆盖 `App`、页面、`store` 与请求层；后端用 Node 原生测试覆盖业务服务、权限、图片文件与 HTTP 接口等。数据库模型测试使用替身，尚未覆盖连接真实 MongoDB、邮件和外部模型的完整端到端链路。
+前端用 Vitest + Testing Library 覆盖 `App`、页面、`store` 与请求层；后端用 Node 原生测试覆盖业务服务、权限、图片文件与 HTTP 接口等。单元测试中的数据库模型使用替身；另已完成独立 MongoDB 下的真实 HTTP 和浏览器联调，见 [联调记录](docs/integration-verification-2026-10-28.md)。真实邮件及外部模型供应商尚未接测。
 
 GitHub Actions 会在推送到 `main` / `master` 或提交 PR 时，分别对前端执行 lint / test / build，对后端执行 lint / test。本地命令仍是质量保障的主力。
 
@@ -240,6 +240,7 @@ cookie 需要额外的跨域配置。推荐让两者同源，生产环境用反�
 | [docs/frontend-redesign.md](docs/frontend-redesign.md) | 人机交互改版说明与验证记录 |
 | [docs/bug-audit-2026-10-26.md](docs/bug-audit-2026-10-26.md) | 原有业务缺陷修复与回归验证 |
 | [docs/regression-review-2026-10-27.md](docs/regression-review-2026-10-27.md) | 后续回归复查、原有设计保留与 AI 会话行为 |
+| [docs/integration-verification-2026-10-28.md](docs/integration-verification-2026-10-28.md) | 真实前后端与 MongoDB 联调、计数修复及验证边界 |
 | [docs/image-storage.md](docs/image-storage.md) | 图片文件存储、权限、旧数据迁移与备份 |
 | [docs/design/product-brief.md](docs/design/product-brief.md) | 产品定位、用户与设计原则 |
 | [docs/design/ui-spec.md](docs/design/ui-spec.md) | 界面规范：色彩、排版、组件与交互 |
