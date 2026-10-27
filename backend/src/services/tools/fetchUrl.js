@@ -1,14 +1,8 @@
+import { fetchPublicUrl } from './publicUrlTransport.js';
+
 const FETCH_TIMEOUT_MS = parseInt(process.env.AI_TOOL_TIMEOUT_MS || '8000', 10);
 const MAX_EXTRACTED_TEXT_LENGTH = parseInt(process.env.AI_FETCH_URL_MAX_CHARS || '6000', 10);
-
-function withTimeout(promise, timeoutMs) {
-  return Promise.race([
-    promise,
-    new Promise((_, reject) => {
-      setTimeout(() => reject(new Error('FETCH_TIMEOUT')), timeoutMs);
-    }),
-  ]);
-}
+const MAX_RESPONSE_BYTES = parseInt(process.env.AI_FETCH_URL_MAX_BYTES || '1048576', 10);
 
 function stripHtmlToText(html = '') {
   return String(html)
@@ -36,7 +30,8 @@ function extractTitle(html = '', fallbackUrl = '') {
 function isAllowedUrl(url) {
   try {
     const parsed = new URL(url);
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+    return (parsed.protocol === 'http:' || parsed.protocol === 'https:')
+      && !parsed.username && !parsed.password;
   } catch {
     return false;
   }
@@ -67,23 +62,18 @@ export async function handler({ url }, signal) {
       return { ok: false, error: '请求已取消' };
     }
 
-    const response = await withTimeout(fetch(url, {
-      method: 'GET',
+    const response = await fetchPublicUrl(url, {
       signal,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; TreeholeAI/1.0; +https://nju.treehole)',
-        'Accept': 'text/html,application/xhtml+xml',
-      },
-      redirect: 'follow',
-    }), FETCH_TIMEOUT_MS);
+      timeoutMs: FETCH_TIMEOUT_MS,
+      maxBytes: MAX_RESPONSE_BYTES,
+    });
 
-    if (!response.ok) {
-      return { ok: false, error: `网页请求失败 (${response.status})` };
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      return { ok: false, error: `网页请求失败 (${response.statusCode})` };
     }
 
-    const html = await response.text();
-    const title = extractTitle(html, url);
-    const text = stripHtmlToText(html).slice(0, MAX_EXTRACTED_TEXT_LENGTH);
+    const title = extractTitle(response.body, url);
+    const text = stripHtmlToText(response.body).slice(0, MAX_EXTRACTED_TEXT_LENGTH);
 
     if (!text) {
       return { ok: false, error: '网页正文为空' };
@@ -96,8 +86,17 @@ export async function handler({ url }, signal) {
       content: text,
     };
   } catch (error) {
-    if (error?.message === 'FETCH_TIMEOUT') {
+    if (error?.code === 'FETCH_TIMEOUT') {
       return { ok: false, error: '网页抓取超时' };
+    }
+    if (error?.code === 'FETCH_ABORTED' || signal?.aborted) {
+      return { ok: false, error: '请求已取消' };
+    }
+    if (error?.code === 'FETCH_BODY_TOO_LARGE') {
+      return { ok: false, error: '网页内容过大' };
+    }
+    if (error?.code === 'FETCH_URL_BLOCKED') {
+      return { ok: false, error: 'URL 无效' };
     }
     return { ok: false, error: '网页抓取失败' };
   }

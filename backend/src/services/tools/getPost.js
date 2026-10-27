@@ -18,12 +18,14 @@ export const schema = {
 };
 
 export async function handler({ postId, commentLimit = 20 }) {
+  const requestedCommentLimit = Number.isFinite(commentLimit) ? Math.trunc(commentLimit) : 20;
+  const boundedCommentLimit = Math.max(1, Math.min(requestedCommentLimit, 50));
   const post = await Post.findOne({ _id: postId, isDeleted: false })
     .select('title content createdAt tags likes').lean();
   if (!post) return { error: '帖子不存在' };
 
-  const comments = await Comment.find({ post: postId, isDeleted: false })
-    .sort({ createdAt: -1 }).limit(Math.min(commentLimit, 50))
+  const comments = await Comment.find({ postId, isDeleted: false })
+    .sort({ createdAt: -1 }).limit(boundedCommentLimit)
     .select('content createdAt').lean();
 
   return {
