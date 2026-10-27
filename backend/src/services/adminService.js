@@ -9,6 +9,16 @@ import { sendBanNotification, sendUnbanNotification } from './emailService.js';
 import { notifyBanned, notifyUnbanned } from './notificationService.js';
 import { syncPostCommentCount } from './commentCountService.js';
 import { broadcast } from './sseManager.js';
+import { serializeCommentMedia, serializePostMedia } from '../utils/media.js';
+
+function serializeReplyMedia(commentId, reply) {
+  return serializeCommentMedia({
+    _id: commentId,
+    id: commentId.toString(),
+    image: '',
+    replies: [reply.toObject ? reply.toObject() : reply],
+  }).replies[0];
+}
 
 async function resolveAssociatedPostId(targetId, targetType) {
   if (targetType === 'post') {
@@ -107,7 +117,7 @@ async function countReportsAgainstUserContent(userId) {
 export async function getPendingReports() {
   // 获取待处理举报
   const reports = await Report.find({ status: 'pending' })
-    .populate('postId', 'title content ownerUserId isDeleted mood moodType createdAt')
+    .populate('postId', 'title content ownerUserId isDeleted mood moodType createdAt image images')
     .populate('reasons.reportedBy', 'email')
     .sort({ reportCount: -1, createdAt: -1 })
     .lean();
@@ -124,10 +134,15 @@ export async function getPendingReports() {
       let post = report.postId;
       if (!post && targetId) {
         post = await Post.findById(targetId)
-          .select('title content ownerUserId isDeleted mood moodType createdAt')
+          .select('title content ownerUserId isDeleted mood moodType createdAt image images')
           .lean();
       }
-      return { ...report, targetType: 'post', targetId, postId: post };
+      return {
+        ...report,
+        targetType: 'post',
+        targetId,
+        postId: post?._id ? serializePostMedia(post) : post,
+      };
     }
 
     // 评论/回复举报，获取评论/回复内容
@@ -165,7 +180,7 @@ export async function getPendingReports() {
       targetContent: target?.content || '[已删除]',
       targetOwnerUserId: target?.ownerUserId,
       targetCreatedAt: target?.createdAt,
-      postId: postInfo,
+      postId: postInfo?._id ? serializePostMedia(postInfo) : postInfo,
     };
   }));
 
@@ -524,7 +539,7 @@ export async function deletePost(postId, adminId, reason) {
     console.error('SSE broadcast failed after admin post deletion:', error);
   }
 
-  return post;
+  return serializePostMedia(post.toObject ? post.toObject() : post);
 }
 
 // ─── Comments Moderation ───
@@ -567,7 +582,7 @@ export async function deleteComment(commentId, adminId, reason) {
       deletedReplyCount: replyIds.length,
     }, visibleCommentCount);
 
-    return comment;
+    return serializeCommentMedia(comment.toObject ? comment.toObject() : comment);
   }
 
   // 如果不是独立评论，可能是嵌入的回复
@@ -608,7 +623,7 @@ export async function deleteComment(commentId, adminId, reason) {
     replyId: reply._id.toString(),
   }, visibleCommentCount);
 
-  return reply;
+  return serializeReplyMedia(parentComment._id, reply);
 }
 
 // ─── Audit Logs ───

@@ -6,7 +6,7 @@ import Comment from '../models/Comment.js';
 import Post from '../models/Post.js';
 import Report from '../models/Report.js';
 import { addClient, removeClient } from './sseManager.js';
-import { createReport, deleteComment } from './adminService.js';
+import { createReport, deleteComment, deletePost, getPendingReports } from './adminService.js';
 
 const postId = '507f1f77bcf86cd799439011';
 const commentId = '507f1f77bcf86cd799439012';
@@ -91,6 +91,102 @@ test('valid reports retain the existing pending-report upsert behavior', async (
   assert.deepEqual(captured.update.$push.reasons, { reason: '原因', reportedBy: 'reporter' });
   assert.equal(captured.update.$setOnInsert.postId.toString(), postId);
   assert.equal(captured.options.upsert, true);
+});
+
+test('pending post reports serialize moderator preview images as media URLs', async () => {
+  const post = {
+    _id: new mongoose.Types.ObjectId(postId),
+    title: '被举报帖子',
+    content: '正文',
+    image: 'data:image/png;base64,AA==',
+    images: ['file:' + 'a'.repeat(64) + '.png'],
+  };
+  const populatedFields = [];
+  mock.method(Report, 'find', () => {
+    const query = {
+      populate(...args) { populatedFields.push(args); return query; },
+      sort() { return query; },
+      lean: async () => [{ _id: 'report-1', targetType: 'post', targetId: post._id, postId: post }],
+    };
+    return query;
+  });
+
+  const [report] = await getPendingReports();
+
+  assert.ok(populatedFields.some(([, fields]) => fields.includes('image images')));
+  assert.match(report.postId.images[0], /^\/api\/media\/posts\/[a-f0-9]{24}\/0\?v=/);
+  assert.equal(report.postId.image, report.postId.images[0]);
+  assert.equal(JSON.stringify(report).includes('data:image/'), false);
+  assert.equal(JSON.stringify(report).includes('file:'), false);
+});
+
+test('comment reports serialize their populated post preview images too', async () => {
+  const post = {
+    _id: new mongoose.Types.ObjectId(postId),
+    title: '评论所属帖子',
+    image: 'data:image/png;base64,AA==',
+    images: ['data:image/png;base64,AA=='],
+  };
+  mock.method(Report, 'find', () => {
+    const query = {
+      populate: () => query,
+      sort: () => query,
+      lean: async () => [{ _id: 'report-2', targetType: 'comment', targetId: commentId, postId: post }],
+    };
+    return query;
+  });
+  mock.method(Comment, 'findById', () => ({
+    select: () => ({ lean: async () => ({ content: '被举报评论', ownerUserId: 'owner', createdAt: new Date(), postId }) }),
+  }));
+
+  const [report] = await getPendingReports();
+
+  assert.match(report.postId.images[0], /^\/api\/media\/posts\/[a-f0-9]{24}\/0\?v=/);
+  assert.equal(JSON.stringify(report).includes('data:image/'), false);
+});
+
+test('admin post deletion responses serialize legacy image values', async () => {
+  const post = {
+    _id: new mongoose.Types.ObjectId(postId),
+    ownerUserId: new mongoose.Types.ObjectId('507f1f77bcf86cd799439014'),
+    images: ['data:image/png;base64,AA=='],
+    isDeleted: false,
+    save: async () => {},
+  };
+  mock.method(Post, 'findById', async () => post);
+  mock.method(Report, 'deleteMany', async () => ({ deletedCount: 0 }));
+  mock.method(AuditLog, 'create', async () => ({}));
+
+  const result = await deletePost(postId, 'admin', '原因');
+
+  assert.equal(result.isDeleted, true);
+  assert.match(result.images[0], /^\/api\/media\/posts\/[a-f0-9]{24}\/0\?v=/);
+  assert.equal(JSON.stringify(result).includes('data:image/'), false);
+});
+
+test('admin comment deletion responses serialize comment and reply image values', async () => {
+  mockCommentCountSync();
+  const reply = {
+    _id: new mongoose.Types.ObjectId(replyId),
+    ownerUserId: new mongoose.Types.ObjectId('507f1f77bcf86cd799439014'),
+    image: 'data:image/jpeg;base64,AQ==',
+    isDeleted: false,
+  };
+  const comment = {
+    _id: new mongoose.Types.ObjectId(commentId),
+    postId: new mongoose.Types.ObjectId(postId),
+    ownerUserId: new mongoose.Types.ObjectId('507f1f77bcf86cd799439014'),
+    image: 'data:image/png;base64,AA==',
+    replies: [reply],
+    save: async () => {},
+  };
+  mock.method(Comment, 'findOne', async () => comment);
+
+  const result = await deleteComment(commentId, 'admin', '原因');
+
+  assert.match(result.image, /^\/api\/media\/comments\/[a-f0-9]{24}\?v=/);
+  assert.match(result.replies[0].image, /^\/api\/media\/replies\/[a-f0-9]{24}\/[a-f0-9]{24}\?v=/);
+  assert.equal(JSON.stringify(result).includes('data:image/'), false);
 });
 
 test('admin deletion broadcasts comment removal and updated comment count', async (t) => {

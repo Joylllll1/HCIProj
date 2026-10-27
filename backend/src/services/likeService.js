@@ -1,6 +1,7 @@
 import Post from '../models/Post.js';
 import Comment from '../models/Comment.js';
 import { getVisibleCommentCounts } from './commentCountService.js';
+import { serializePostMedia } from '../utils/media.js';
 
 export const getUserLikes = async (userId) => {
   // 帖子喜爱：likedBy 含该用户的帖子
@@ -13,7 +14,8 @@ export const getUserLikes = async (userId) => {
 
   const visibleCommentCounts = await getVisibleCommentCounts(likedPosts.map((post) => post._id.toString()));
 
-  const posts = likedPosts.map((p) => ({
+  const posts = likedPosts.map((p) => serializePostMedia({
+    ...p,
     id: p._id.toString(),
     title: p.title,
     content: p.content,

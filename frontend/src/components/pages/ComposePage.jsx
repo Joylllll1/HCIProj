@@ -8,6 +8,7 @@ import { fileToOptimizedDataUrl, getImageGridLayout, MAX_POST_IMAGES } from '../
 const selectShowToast = (s) => s.showToast;
 const selectSetUnsavedChangesHandler = (s) => s.setUnsavedChangesHandler;
 const selectClearUnsavedChangesHandler = (s) => s.clearUnsavedChangesHandler;
+const MAX_INLINE_IMAGES_TOTAL_BYTES = 8 * 1024 * 1024;
 
 const EMPTY_DRAFT = {
   title: '',
@@ -82,6 +83,7 @@ function ComposePage({ onPublish, draftId: initialDraftId }) {
   const mutationInFlightRef = useRef(false);
   const pendingImageFilesRef = useRef(0);
   const formValuesRef = useRef({ ...EMPTY_DRAFT });
+  const imageBytesRef = useRef(new Map());
   const draftsCreatedHereRef = useRef(new Set());
   const draftUnavailable = Boolean(initialDraftId)
     && !(draftLoad.status === 'loaded' && draftLoad.requestedId === initialDraftId);
@@ -114,6 +116,9 @@ function ComposePage({ onPublish, draftId: initialDraftId }) {
 
   const applyDraftToForm = useCallback((draft) => {
     const next = normalizeDraftForm(draft);
+    imageBytesRef.current = new Map(next.images.map((image, index) => [
+      image, draft.imageBytes?.[index] ?? image.length,
+    ]));
     formValuesRef.current = next;
     setTitle(next.title);
     setContent(next.content);
@@ -228,7 +233,15 @@ function ComposePage({ onPublish, draftId: initialDraftId }) {
     setProcessingImages(true);
     Promise.all(selectedFiles.map((file) => fileToOptimizedDataUrl(file)))
       .then((urls) => {
-        updateFormField('images', (current) => [...current, ...urls].slice(0, MAX_POST_IMAGES), true);
+        updateFormField('images', (current) => {
+          const next = [...current, ...urls].slice(0, MAX_POST_IMAGES);
+          const totalBytes = next.reduce((sum, image) => sum + (imageBytesRef.current.get(image) ?? image.length), 0);
+          if (totalBytes > MAX_INLINE_IMAGES_TOTAL_BYTES) {
+            showToast('图片总大小不能超过 8MB，请移除部分图片后重试。');
+            return current;
+          }
+          return next;
+        }, true);
       })
       .catch((err) => {
         if (editorMountedRef.current) showToast(err.message || '读取图片失败');
@@ -262,13 +275,28 @@ function ComposePage({ onPublish, draftId: initialDraftId }) {
       draftsCreatedHereRef.current.add(savedDraft.id);
       setDraftId(savedDraft.id);
       setDraftLoad({ status: 'loaded', requestedId: savedDraft.id, error: '' });
-      window.history.replaceState(null, '', `/compose?draftId=${savedDraft.id}`);
+      window.history.replaceState(window.history.state, '', `/compose?draftId=${savedDraft.id}`);
       useUiStore.setState({ draftId: savedDraft.id });
     }
 
     setDraftId(savedDraft.id);
     setLastSavedAt(savedDraft.updatedAt);
     const savedForm = normalizeDraftForm(savedDraft);
+    // The server replaces uploaded data with media URLs; map only the submitted
+    // images, preserving any edits made while the save request was pending.
+    const savedImageUrls = new Map();
+    form.images.forEach((image, index) => {
+      const occurrences = savedImageUrls.get(image) || [];
+      occurrences.push(savedForm.images[index] ?? image);
+      savedImageUrls.set(image, occurrences);
+    });
+    savedForm.images.forEach((image, index) => {
+      imageBytesRef.current.set(image, savedDraft.imageBytes?.[index] ?? form.images[index]?.length ?? image.length);
+    });
+    const currentForm = formValuesRef.current;
+    const currentImages = currentForm.images.map((image) => savedImageUrls.get(image)?.shift() ?? image);
+    formValuesRef.current = { ...currentForm, images: currentImages };
+    setImages(currentImages);
     setOriginalData(savedForm);
     const hasFurtherChanges = hasDraftChanges(formValuesRef.current, savedForm);
     setIsDirty(hasFurtherChanges);
@@ -333,7 +361,7 @@ function ComposePage({ onPublish, draftId: initialDraftId }) {
         if (!editorMountedRef.current) return;
         draftsCreatedHereRef.current.delete(publishTargetId);
         showToast('发布成功');
-        window.history.replaceState(null, '', '/compose');
+        window.history.replaceState(window.history.state, '', '/compose');
         useUiStore.setState({ draftId: null });
       } else {
         await onPublish({

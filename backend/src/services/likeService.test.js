@@ -1,5 +1,6 @@
 import { afterEach, test, mock } from 'node:test';
 import assert from 'node:assert/strict';
+import mongoose from 'mongoose';
 import Comment from '../models/Comment.js';
 import Post from '../models/Post.js';
 import { getUserLikes } from './likeService.js';
@@ -41,4 +42,34 @@ test('liked comments and replies from deleted posts are omitted', async () => {
   ]);
   assert.equal(result.comments.every((entry) => entry.postId === 'active-post'), true);
   assert.equal(result.comments.every((entry) => entry.postIsDeleted === false), true);
+});
+
+test('liked post image payloads use media URLs instead of stored values', async () => {
+  const postId = new mongoose.Types.ObjectId();
+  mock.method(Post, 'find', () => ({
+    sort: () => ({
+      lean: async () => [{
+        _id: postId,
+        title: '已点赞帖子',
+        content: '正文',
+        images: ['data:image/png;base64,AA=='],
+        likedBy: ['user-1'],
+      }],
+    }),
+  }));
+  mock.method(Comment, 'aggregate', async () => []);
+  mock.method(Comment, 'find', () => {
+    const query = {
+      populate: () => query,
+      sort: () => query,
+      lean: async () => [],
+    };
+    return query;
+  });
+
+  const result = await getUserLikes('user-1');
+
+  assert.match(result.posts[0].images[0], new RegExp(`^/api/media/posts/${postId}/0\\?v=`));
+  assert.equal(result.posts[0].image, result.posts[0].images[0]);
+  assert.equal(JSON.stringify(result).includes('data:image/'), false);
 });

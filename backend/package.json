@@ -9,7 +9,8 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "test": "node --test",
-    "seed:fortune": "node src/scripts/seedFortune.js"
+    "seed:fortune": "node src/scripts/seedFortune.js",
+    "migrate:images": "node src/scripts/migrateImages.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

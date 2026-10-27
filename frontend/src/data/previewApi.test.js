@@ -70,6 +70,25 @@ describe('isolated course preview', () => {
     expect(feed.posts.map((post) => post.id)).toContain(created.id);
     expect(network).not.toHaveBeenCalled();
   });
+
+  it('omits images from draft summaries while preserving them for editing and publication', async () => {
+    const images = ['data:image/png;base64,AA==', 'data:image/jpeg;base64,AQ=='];
+    const created = await (await window.fetch('/api/drafts', {
+      method: 'POST',
+      body: JSON.stringify({ title: '图片草稿', content: '', tags: ['校园生活'], images }),
+    })).json();
+    const summaries = await (await window.fetch('/api/drafts')).json();
+    const summary = summaries.find((draft) => draft.id === created.id);
+    expect(summary).toMatchObject({ id: created.id, title: '图片草稿', content: '', tags: ['校园生活'] });
+    expect(summary).not.toHaveProperty('image');
+    expect(summary).not.toHaveProperty('images');
+
+    const detail = await (await window.fetch(`/api/drafts/${created.id}`)).json();
+    expect(detail.images).toEqual(images);
+    const published = await (await window.fetch(`/api/drafts/${created.id}/publish`, { method: 'POST' })).json();
+    expect(published.images).toEqual(images);
+    expect(network).not.toHaveBeenCalled();
+  });
 });
 
 // Each preview reset is already covered above; the shapes must also match the real API.

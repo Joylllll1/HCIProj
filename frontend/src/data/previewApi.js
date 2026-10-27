@@ -158,7 +158,7 @@ export function installPreviewApi() {
     if (/^\/api\/comments\/[^/]+$/.test(path) && method === 'GET') return json(comments[path.split('/').pop()] || []);
     if (path === '/api/drafts/delete-many' && method === 'POST') { drafts = drafts.filter((draft) => !body.ids?.includes(draft.id)); return json({ success: true }); }
     if (path === '/api/drafts' && method === 'POST') { const draft = { ...body, id: `draft-${Date.now()}`, updatedAt: ago(0) }; drafts.unshift(draft); return json(draft); }
-    if (path === '/api/drafts') return json(drafts);
+    if (path === '/api/drafts') return json(drafts.map(({ id, title, content, tags, updatedAt }) => ({ id, title, content, tags, updatedAt })));
     const publishMatch = path.match(/^\/api\/drafts\/([^/]+)\/publish$/);
     if (publishMatch && method === 'POST') {
       const draft = drafts.find((d) => d.id === publishMatch[1]);

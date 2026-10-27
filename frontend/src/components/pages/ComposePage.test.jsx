@@ -30,6 +30,10 @@ const deferred = () => {
   return { promise, resolve, reject };
 };
 
+const makeImageDataUrl = (payloadBytes, character = 'A') => (
+  `data:image/png;base64,${character.repeat(payloadBytes)}`
+);
+
 const savedDraft = (content, extra = {}) => ({
   id: 'draft-1',
   title: '',
@@ -192,6 +196,31 @@ describe('ComposePage', () => {
     expect(navigate).not.toHaveBeenCalled();
   });
 
+  it('preserves the route history state when saving and publishing a draft', async () => {
+    const routeState = { njuRouteIndex: 12 };
+    draftService.createDraft.mockResolvedValueOnce(savedDraft('草稿正文'));
+    draftService.publishDraft.mockResolvedValueOnce({
+      id: 'published-post',
+      content: '草稿正文',
+      isLiked: false,
+      likes: 0,
+    });
+    window.history.replaceState(routeState, '', '/compose');
+    render(<ComposePage onPublish={vi.fn()} />);
+
+    fireEvent.change(screen.getByRole('textbox', { name: '树洞内容' }), {
+      target: { value: '草稿正文' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+    await waitFor(() => expect(window.location.search).toBe('?draftId=draft-1'));
+    expect(window.history.state).toEqual(routeState);
+
+    fireEvent.click(screen.getByRole('button', { name: '发布动态' }));
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith('home', undefined, { force: true }));
+    expect(window.location.pathname).toBe('/compose');
+    expect(window.history.state).toEqual(routeState);
+  });
+
   it('preserves edits made while a save is pending and marks them unsaved', async () => {
     const save = deferred();
     draftService.createDraft.mockReturnValue(save.promise);
@@ -239,6 +268,148 @@ describe('ComposePage', () => {
     expect(title).toHaveValue('只有标题');
     expect(content).toHaveValue('正文内容');
     expect(useUiStore.getState().unsavedChangesHandler).toEqual(expect.any(Function));
+  });
+
+  it('adopts saved media URLs without making an unchanged draft dirty again', async () => {
+    const upload = 'data:image/png;base64,cGhvdG8=';
+    const url = '/api/media/drafts/draft-1/0?v=photo';
+    useUiStore.setState({ composeSeed: { content: '图片正文', images: [upload] } });
+    draftService.createDraft.mockResolvedValue(savedDraft('图片正文', { images: [url], imageBytes: [upload.length] }));
+    draftService.updateDraft.mockResolvedValue(savedDraft('继续写正文', { images: [url], imageBytes: [upload.length] }));
+    render(<ComposePage onPublish={vi.fn()} />);
+    await screen.findByRole('img', { name: '待发布图片 1' });
+    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+
+    await waitFor(() => expect(screen.getByRole('img', { name: '待发布图片 1' })).toHaveAttribute('src', url));
+    expect(showToast).toHaveBeenCalledWith('已保存');
+    expect(useUiStore.getState().unsavedChangesHandler).toBeNull();
+
+    fireEvent.change(screen.getByRole('textbox', { name: '树洞内容' }), { target: { value: '继续写正文' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+    await waitFor(() => expect(draftService.updateDraft).toHaveBeenCalledWith('draft-1', expect.objectContaining({ images: [url] })));
+  });
+
+  it('maps duplicate uploaded images to separate saved positions and clears the dirty guard', async () => {
+    const upload = 'data:image/png;base64,cGhvdG8=';
+    const urls = ['/api/media/drafts/draft-1/0?v=photo', '/api/media/drafts/draft-1/1?v=photo'];
+    useUiStore.setState({ composeSeed: { content: '相同图片两次', images: [upload, upload] } });
+    draftService.createDraft.mockResolvedValue(savedDraft('相同图片两次', {
+      images: urls, imageBytes: [upload.length, upload.length],
+    }));
+    render(<ComposePage onPublish={vi.fn()} />);
+    await screen.findByRole('img', { name: '待发布图片 2' });
+    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('已保存'));
+    expect(screen.getAllByRole('img', { name: /待发布图片/ }).map((image) => image.getAttribute('src'))).toEqual(urls);
+    expect(useUiStore.getState().unsavedChangesHandler).toBeNull();
+  });
+
+  it('counts stored image bytes instead of URL lengths when adding to an opened draft', async () => {
+    const urls = ['/api/media/drafts/draft-1/0?v=first', '/api/media/drafts/draft-1/1?v=second'];
+    const size = Math.floor(2.9 * 1024 * 1024);
+    draftService.fetchDraftById.mockResolvedValue(savedDraft('已保存图片', { images: urls, imageBytes: [size, size] }));
+    fileToOptimizedDataUrl.mockResolvedValue(makeImageDataUrl(size));
+    render(<ComposePage draftId="draft-1" onPublish={vi.fn()} />);
+    await screen.findByRole('img', { name: '待发布图片 2' });
+    fireEvent.change(document.querySelector('input[type="file"]'), {
+      target: { files: [new File(['third'], 'third.png', { type: 'image/png' })] },
+    });
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('图片总大小不能超过 8MB，请移除部分图片后重试。'));
+    expect(screen.getAllByRole('img', { name: /待发布图片/ }).map((image) => image.getAttribute('src'))).toEqual(urls);
+  });
+
+  it('keeps text edits and image removal made while uploaded images are being saved', async () => {
+    const save = deferred();
+    const upload = 'data:image/png;base64,cGhvdG8=';
+    useUiStore.setState({ composeSeed: { content: '保存中的正文', images: [upload] } });
+    draftService.createDraft.mockReturnValue(save.promise);
+    render(<ComposePage onPublish={vi.fn()} />);
+    await screen.findByRole('img', { name: '待发布图片 1' });
+    fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+    fireEvent.change(screen.getByRole('textbox', { name: '树洞内容' }), { target: { value: '保存期间继续修改' } });
+    fireEvent.click(screen.getByRole('button', { name: '删除第 1 张图片' }));
+    await act(async () => save.resolve(savedDraft('保存中的正文', {
+      images: ['/api/media/drafts/draft-1/0?v=photo'], imageBytes: [upload.length],
+    })));
+    expect(screen.queryByRole('img', { name: '待发布图片 1' })).not.toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: '树洞内容' })).toHaveValue('保存期间继续修改');
+    expect(useUiStore.getState().unsavedChangesHandler).toEqual(expect.any(Function));
+    expect(showToast).toHaveBeenCalledWith('已保存，之后的修改尚未保存');
+  });
+
+  it('rejects an over-limit image batch, preserves existing content, and accepts a smaller retry', async () => {
+    const existingImage = makeImageDataUrl(2_800_000, 'E');
+    const nearLimitImage = makeImageDataUrl(Math.floor(2.9 * 1024 * 1024));
+    const smallerImage = 'data:image/png;base64,small';
+    const onPublish = vi.fn().mockResolvedValue(undefined);
+    useUiStore.setState({
+      composeSeed: { title: '', content: '正文保留', moodType: null, tags: [], images: [existingImage] },
+    });
+    fileToOptimizedDataUrl.mockResolvedValue(nearLimitImage);
+    render(<ComposePage onPublish={onPublish} />);
+
+    const fileInput = document.querySelector('input[type="file"]');
+    await screen.findByRole('img', { name: '待发布图片 1' });
+    fireEvent.change(fileInput, {
+      target: { files: [
+        new File(['one'], 'one.png', { type: 'image/png' }),
+        new File(['two'], 'two.png', { type: 'image/png' }),
+        new File(['three'], 'three.png', { type: 'image/png' }),
+      ] },
+    });
+
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('图片总大小不能超过 8MB，请移除部分图片后重试。'));
+    expect(screen.getAllByRole('img', { name: /待发布图片/ })).toHaveLength(1);
+    expect(screen.getByRole('textbox', { name: '树洞内容' })).toHaveValue('正文保留');
+
+    fileToOptimizedDataUrl.mockResolvedValueOnce(smallerImage);
+    fireEvent.change(fileInput, {
+      target: { files: [new File(['retry'], 'retry.png', { type: 'image/png' })] },
+    });
+    await waitFor(() => expect(screen.getAllByRole('img', { name: /待发布图片/ })).toHaveLength(2));
+
+    fireEvent.click(screen.getByRole('button', { name: '发布动态' }));
+    await waitFor(() => expect(onPublish).toHaveBeenCalledTimes(1));
+    expect(onPublish.mock.calls[0][0]).toMatchObject({
+      content: '正文保留',
+      images: [existingImage, smallerImage],
+    });
+  });
+
+  it('checks concurrent image batches against the latest form total', async () => {
+    const existingImage = makeImageDataUrl(2_800_000, 'E');
+    const firstImage = makeImageDataUrl(Math.floor(2.9 * 1024 * 1024), 'A');
+    const secondImage = makeImageDataUrl(Math.floor(2.9 * 1024 * 1024), 'B');
+    const firstRead = deferred();
+    const secondRead = deferred();
+    fileToOptimizedDataUrl
+      .mockReturnValueOnce(firstRead.promise)
+      .mockReturnValueOnce(secondRead.promise);
+    useUiStore.setState({
+      composeSeed: { title: '', content: '并发正文', moodType: null, tags: [], images: [existingImage] },
+    });
+    render(<ComposePage onPublish={vi.fn()} />);
+
+    const fileInput = document.querySelector('input[type="file"]');
+    await screen.findByRole('img', { name: '待发布图片 1' });
+    fireEvent.change(fileInput, {
+      target: { files: [new File(['first'], 'first.png', { type: 'image/png' })] },
+    });
+    fireEvent.change(fileInput, {
+      target: { files: [new File(['second'], 'second.png', { type: 'image/png' })] },
+    });
+
+    await act(async () => firstRead.resolve(firstImage));
+    await waitFor(() => expect(screen.getAllByRole('img', { name: /待发布图片/ })).toHaveLength(2));
+    await act(async () => secondRead.resolve(secondImage));
+
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('图片总大小不能超过 8MB，请移除部分图片后重试。'));
+    expect(screen.getAllByRole('img', { name: /待发布图片/ })).toHaveLength(2);
+    expect(screen.getByRole('textbox', { name: '树洞内容' })).toHaveValue('并发正文');
+    expect(screen.getAllByRole('img', { name: /待发布图片/ }).map((image) => image.getAttribute('src'))).toEqual([
+      existingImage,
+      firstImage,
+    ]);
   });
 
   it('reserves image slots while files are processing and refuses publish until they finish', async () => {

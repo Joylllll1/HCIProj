@@ -33,7 +33,7 @@ NJU树洞：南京大学校园半匿名社区，课程项目。前端 React 18 +
 - 登录态是 HTTP-only cookie：`accessToken` 15m、`refreshToken` 7d；收到 401 时静默刷新并重放一次原请求
 - 帖子与评论用逻辑删除（`isDeleted`），草稿物理删除，用户只封禁不物理删除
 - 匿名展示名由 `hash(userId + ':' + postId)` 映射（`frontend/src/utils.js`）：同一用户在同一帖内稳定、跨帖不同。不要改成全局固定昵称
-- 图片暂用内联 base64 Data URL，改动时留意列表接口体积
+- 新图片由后端文件存储保存，MongoDB 存内部引用，DTO/SSE 返回同源 `/api/media` 地址；旧 base64 兼容读取。图片目录须持久化，不能把内部文件引用当作客户端输入直接接受
 - 通知中心是“SSE 触发刷新 + 轮询兜底”，不是纯推送
 - 前端路由是 `activePage + history API`，尚未使用 React Router，不要擅自引入
 - UI 文案统一简体中文；正文对比度与键盘可达性属于验收项

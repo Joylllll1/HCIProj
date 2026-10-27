@@ -22,7 +22,7 @@
 
 项目包含注册登录、匿名发帖、评论回复、点赞收藏、通知中心、校园公告与活动、带工具调用的 AI 助手，以及管理后台。当前版本同时用于人机交互课程的界面改版作业，交互与主题的设计说明见 [前端改版说明](docs/frontend-redesign.md)。
 
-正常运行时，前端通过 `/api` 连接后端，账号、帖子、评论和图片等数据保存在 MongoDB 中。仓库另提供不连接后端的前端预览模式（`?preview=1`），供快速查看界面；该模式使用虚构的临时数据，不代表正常运行时的数据来源。
+正常运行时，前端通过 `/api` 连接后端，账号、帖子和评论等数据保存在 MongoDB 中，图片文件独立保存在后端目录，接口返回同源图片地址。旧 base64 图片兼容读取，迁移与备份方式见 [图片存储](docs/image-storage.md)。仓库另提供不连接后端的前端预览模式（`?preview=1`），供快速查看界面；该模式使用虚构的临时数据，不代表正常运行时的数据来源。
 
 ## 界面预览
 
@@ -190,6 +190,7 @@ JWT_REFRESH_EXPIRES_IN=7d
 | `ADMIN_CONTACT_QQ` | 禁言 / 解禁通知文案里的联系信息 |
 | `VERIFY_CODE_EXPIRES_MIN` | 验证码有效期，默认 5 分钟 |
 | `COOKIE_SAME_SITE` / `ACCESS_COOKIE_MAX_AGE_MS` / `REFRESH_COOKIE_MAX_AGE_MS` | 微调 cookie 策略 |
+| `IMAGE_STORAGE_DIR` | 图片持久目录，默认 `backend/storage/images/`；部署和备份时需与 MongoDB 一起保留 |
 
 ## 测试与 CI
 
@@ -201,13 +202,13 @@ cd frontend && npm test && npm run lint && npm run build
 cd backend && npm test && npm run lint
 ```
 
-前端用 Vitest + Testing Library 覆盖 `App`、部分页面、`store` 与 `apiClient`；后端用 Node 原生测试覆盖 JWT、cookie、鉴权响应等工具层。目前没有端到端 E2E 链路。
+前端用 Vitest + Testing Library 覆盖 `App`、页面、`store` 与请求层；后端用 Node 原生测试覆盖业务服务、权限、图片文件与 HTTP 接口等。数据库模型测试使用替身，尚未覆盖连接真实 MongoDB、邮件和外部模型的完整端到端链路。
 
 GitHub Actions 会在推送到 `main` / `master` 或提交 PR 时，分别对前端执行 lint / test / build，对后端执行 lint / test。本地命令仍是质量保障的主力。
 
 ## 已知限制
 
-- 图片已经随内容以内联 base64 Data URL 保存在 MongoDB 中，尚未接入独立文件或对象存储，列表接口体积较大
+- 图片采用后端本地文件存储，部署时须持久化并备份图片目录；尚未接入多实例共享或对象存储
 - 通知中心不是纯 SSE 推送，依赖前端刷新 + 轮询兜底
 - 验证码与登录等接口尚未接入统一限流和错误次数限制；图片已有大小和数量校验，用户级上传配额与资源清理仍待补充
 - 登录 Cookie 已使用 HttpOnly 和 SameSite（默认 lax）；当前 CORS 回显请求来源，尚未实现独立的 CSRF token 校验与统一安全响应头策略
@@ -237,6 +238,7 @@ cookie 需要额外的跨域配置。推荐让两者同源，生产环境用反�
 | [docs/wiki/setup.md](docs/wiki/setup.md) | 环境搭建与常见问题 |
 | [docs/wiki/architecture.md](docs/wiki/architecture.md) | 架构、SSE、登录态与约束 |
 | [docs/frontend-redesign.md](docs/frontend-redesign.md) | 人机交互改版说明与验证记录 |
+| [docs/image-storage.md](docs/image-storage.md) | 图片文件存储、权限、旧数据迁移与备份 |
 | [docs/design/product-brief.md](docs/design/product-brief.md) | 产品定位、用户与设计原则 |
 | [docs/design/ui-spec.md](docs/design/ui-spec.md) | 界面规范：色彩、排版、组件与交互 |
 | [docs/hci-usability-review.md](docs/hci-usability-review.md) | 可用性评审 |

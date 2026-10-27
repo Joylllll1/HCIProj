@@ -3,8 +3,18 @@ import Post from '../models/Post.js';
 import AppError from '../utils/AppError.js';
 import { notifyComment } from './notificationService.js';
 import { syncPostCommentCount } from './commentCountService.js';
-import { normalizeInlineImage } from '../utils/image.js';
+import { storeInlineImage } from './imageStorage.js';
+import { serializeCommentMedia } from '../utils/media.js';
 import { broadcast } from './sseManager.js';
+
+function serializeReplyMedia(commentId, reply) {
+  return serializeCommentMedia({
+    _id: commentId,
+    id: commentId.toString(),
+    image: '',
+    replies: [reply],
+  }).replies[0];
+}
 
 function broadcastPostCommentStats(postId, comments) {
   try {
@@ -33,7 +43,7 @@ export const createComment = async (userId, postId, content, image = '', officia
   const post = await Post.findOne({ _id: postId, isDeleted: false });
   if (!post) throw new AppError('帖子不存在', 404, 'POST_NOT_FOUND');
   const normalizedContent = typeof content === 'string' ? content.trim() : '';
-  const normalizedImage = normalizeInlineImage(image, '评论图片');
+  const normalizedImage = await storeInlineImage(image, '评论图片');
 
   if (!normalizedContent && !normalizedImage) {
     throw new AppError('请输入内容或上传图片', 400, 'COMMENT_CONTENT_REQUIRED');
@@ -59,11 +69,11 @@ export const createComment = async (userId, postId, content, image = '', officia
     ).catch(() => {});
   }
 
-  const commentDto = {
+  const commentDto = serializeCommentMedia({
     ...comment.toObject(),
     id: comment._id.toString(),
     time: formatRelativeTime(comment.createdAt),
-  };
+  });
 
   try {
     broadcastPostCommentStats(postId, visibleCommentCount);
@@ -83,7 +93,7 @@ export const addReply = async (userId, commentId, content, image = '', official 
   if (!comment) throw new AppError('评论不存在', 404, 'COMMENT_NOT_FOUND');
   await assertActivePost(comment.postId);
   const normalizedContent = typeof content === 'string' ? content.trim() : '';
-  const normalizedImage = normalizeInlineImage(image, '回复图片');
+  const normalizedImage = await storeInlineImage(image, '回复图片');
 
   if (!normalizedContent && !normalizedImage) {
     throw new AppError('请输入内容或上传图片', 400, 'REPLY_CONTENT_REQUIRED');
@@ -110,7 +120,8 @@ export const addReply = async (userId, commentId, content, image = '', official 
   const visibleCommentCount = await syncPostCommentCount(comment.postId);
 
   const savedReply = comment.replies[comment.replies.length - 1];
-  const replyDto = {
+  const replyDto = serializeReplyMedia(comment._id, {
+    _id: savedReply._id,
     id: savedReply._id.toString(),
     ownerUserId: savedReply.ownerUserId.toString(),
     content: savedReply.content,
@@ -122,7 +133,7 @@ export const addReply = async (userId, commentId, content, image = '', official 
     createdAt: savedReply.createdAt,
     time: formatRelativeTime(savedReply.createdAt),
     isLiked: false,
-  };
+  });
 
   try {
     broadcastPostCommentStats(comment.postId, visibleCommentCount);
@@ -144,7 +155,7 @@ export const getComments = async (postId, userId) => {
     .sort({ createdAt: -1 })
     .lean();
 
-  return comments.map((c) => ({
+  return comments.map((c) => serializeCommentMedia({
     ...c,
     id: c._id.toString(),
     time: formatRelativeTime(c.createdAt),
@@ -249,7 +260,6 @@ export const toggleLike = async (userId, commentId) => {
 
   const comment = await Comment.findOne({ _id: commentId, isDeleted: false }).lean();
   if (!comment) throw new AppError('评论不存在', 404, 'COMMENT_NOT_FOUND');
-  await assertActivePost(comment.postId);
 
   return {
     liked: comment.likedBy?.some((id) => id.toString() === userId) || false,
@@ -310,7 +320,6 @@ export const toggleReplyLike = async (userId, commentId, replyId) => {
 
   const comment = await Comment.findOne({ _id: commentId, isDeleted: false }).lean();
   if (!comment) throw new AppError('评论不存在', 404, 'COMMENT_NOT_FOUND');
-  await assertActivePost(comment.postId);
 
   const reply = comment.replies?.find((item) => item._id.toString() === replyId.toString());
   if (!reply || reply.isDeleted) throw new AppError('回复不存在', 404, 'REPLY_NOT_FOUND');

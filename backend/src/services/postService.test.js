@@ -1,9 +1,26 @@
 import { afterEach, test, mock } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import mongoose from 'mongoose';
+import Comment from '../models/Comment.js';
 import Post from '../models/Post.js';
-import { createPost, getPosts } from './postService.js';
+import { readImage } from './imageStorage.js';
+import { createPost, getPostById, getPosts } from './postService.js';
 
 afterEach(() => mock.restoreAll());
+
+async function useTempImageStorage(t) {
+  const previousDirectory = process.env.IMAGE_STORAGE_DIR;
+  const directory = await mkdtemp(join(tmpdir(), 'treehole-post-images-'));
+  process.env.IMAGE_STORAGE_DIR = directory;
+  t.after(async () => {
+    if (previousDirectory === undefined) delete process.env.IMAGE_STORAGE_DIR;
+    else process.env.IMAGE_STORAGE_DIR = previousDirectory;
+    await rm(directory, { recursive: true, force: true });
+  });
+}
 
 function captureFeedQuery() {
   const filters = [];
@@ -39,7 +56,8 @@ function mockPostCreate() {
   return () => createdPost;
 }
 
-test('createPost ignores client-supplied state and preserves supported fields', async () => {
+test('createPost ignores client-supplied state and stores images outside MongoDB', async (t) => {
+  await useTempImageStorage(t);
   const getCreatedPost = mockPostCreate();
   const image = 'data:image/png;base64,AA==';
   const post = await createPost('authenticated-user', {
@@ -68,8 +86,13 @@ test('createPost ignores client-supplied state and preserves supported fields', 
     mood: '开心',
     campus: '鼓楼',
     tags: ['校园生活'],
-    images: [image],
+    images: [getCreatedPost().images[0]],
   });
+  assert.match(getCreatedPost().images[0], /^file:[a-f0-9]{64}\.png$/);
+  assert.deepEqual((await readImage(getCreatedPost().images[0])).buffer, Buffer.from('AA==', 'base64'));
+  assert.match(post.images[0], /^\/api\/media\/posts\/post-1\/0\?v=/);
+  assert.equal(JSON.stringify(post).includes('data:image/'), false);
+  assert.equal(JSON.stringify(post).includes('file:'), false);
   assert.equal(post.ownerUserId, 'authenticated-user');
   assert.equal(post.isDeleted, false);
   assert.equal(post.likes, 0);
@@ -79,7 +102,8 @@ test('createPost ignores client-supplied state and preserves supported fields', 
   assert.equal(post.isSaved, false);
 });
 
-test('createPost keeps supported fields and accepts an image-only post', async () => {
+test('createPost keeps supported fields and accepts an image-only post', async (t) => {
+  await useTempImageStorage(t);
   const getCreatedPost = mockPostCreate();
   const image = 'data:image/png;base64,AA==';
   const post = await createPost('authenticated-user', {
@@ -95,10 +119,37 @@ test('createPost keeps supported fields and accepts an image-only post', async (
     moodType: 'calm',
     mood: '平静',
     tags: ['树洞'],
-    images: [image],
+    images: [getCreatedPost().images[0]],
   });
+  assert.match(post.images[0], /^\/api\/media\/posts\/post-1\/0\?v=/);
   assert.equal(post.image, post.images[0]);
   assert.equal(post.content, '');
+});
+
+test('legacy post image data is serialized as a same-origin media URL when read', async () => {
+  const postId = new mongoose.Types.ObjectId();
+  mock.method(Post, 'findOne', () => ({
+    lean: async () => ({
+      _id: postId,
+      title: '旧帖子',
+      content: '正文',
+      image: 'data:image/jpeg;base64,AQ==',
+      images: [],
+      likedBy: [],
+      savedBy: [],
+      likes: 0,
+      saves: 0,
+      comments: 0,
+    }),
+  }));
+  mock.method(Comment, 'aggregate', async () => []);
+
+  const post = await getPostById(postId.toString(), 'user-1');
+
+  assert.match(post.image, new RegExp(`^/api/media/posts/${postId}/0\\?v=`));
+  assert.deepEqual(post.images, [post.image]);
+  assert.equal(JSON.stringify(post).includes('data:image/'), false);
+  assert.equal(JSON.stringify(post).includes('file:'), false);
 });
 
 test('exact tag filtering is applied to both rows and total alongside keyword search', async () => {

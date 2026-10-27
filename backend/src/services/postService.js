@@ -3,7 +3,8 @@ import AppError from '../utils/AppError.js';
 import { notifyLike } from './notificationService.js';
 import { broadcast } from './sseManager.js';
 import { getVisibleCommentCounts, getVisibleCommentCount } from './commentCountService.js';
-import { normalizeInlineImages } from '../utils/image.js';
+import { storeInlineImages } from './imageStorage.js';
+import { serializePostMedia } from '../utils/media.js';
 
 function escapeRegex(value = '') {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -38,7 +39,7 @@ function toPostDto(post, userId) {
       ? [post.image]
       : [];
 
-  return {
+  return serializePostMedia({
     ...post,
     tags: Array.isArray(post.tags) ? post.tags : [],
     image: images[0] || '',
@@ -50,7 +51,7 @@ function toPostDto(post, userId) {
     saves: post.saves || 0,
     isLiked: userId ? post.likedBy?.some((id) => id.toString() === userId) : false,
     isSaved: userId ? post.savedBy?.some((id) => id.toString() === userId) : false,
-  };
+  });
 }
 
 export const createPost = async (userId, data) => {
@@ -60,7 +61,7 @@ export const createPost = async (userId, data) => {
       ? [data.image]
       : [];
 
-  const images = normalizeInlineImages(sourceImages, { label: '帖子图片' });
+  const images = await storeInlineImages(sourceImages, { label: '帖子图片' });
   const title = typeof data.title === 'string' ? data.title.trim() : '';
   const content = typeof data.content === 'string' ? data.content.trim() : '';
   const tags = Array.isArray(data.tags)

@@ -1,5 +1,8 @@
 import { afterEach, test, mock } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import mongoose from 'mongoose';
 import Comment from '../models/Comment.js';
 import Post from '../models/Post.js';
@@ -20,6 +23,17 @@ const commentId = '507f1f77bcf86cd799439012';
 const replyId = '507f1f77bcf86cd799439013';
 
 afterEach(() => mock.restoreAll());
+
+async function useTempImageStorage(t) {
+  const previousDirectory = process.env.IMAGE_STORAGE_DIR;
+  const directory = await mkdtemp(join(tmpdir(), 'treehole-comment-images-'));
+  process.env.IMAGE_STORAGE_DIR = directory;
+  t.after(async () => {
+    if (previousDirectory === undefined) delete process.env.IMAGE_STORAGE_DIR;
+    else process.env.IMAGE_STORAGE_DIR = previousDirectory;
+    await rm(directory, { recursive: true, force: true });
+  });
+}
 
 function captureEvents(t) {
   const writes = [];
@@ -128,6 +142,60 @@ test('only admins can choose official comments and replies, without forcing thei
   assert.deepEqual(replyComments.map((comment) => comment.replies[0].official), [false, false, true, false]);
   assert.equal(eventList().filter(({ event }) => event === 'comment-created').length, 4);
   assert.equal(eventList().filter(({ event }) => event === 'reply-created').length, 4);
+});
+
+test('comment and reply responses and SSE events serialize stored image references', async (t) => {
+  await useTempImageStorage(t);
+  const eventList = captureEvents(t);
+  mockCommentCountSync();
+  mock.method(Post, 'findOne', async () => ({ ownerUserId: 'user-1', title: '帖子' }));
+  mock.method(Post, 'exists', async () => true);
+  let storedComment;
+  mock.method(Comment, 'create', async (data) => {
+    storedComment = { ...data, _id: new mongoose.Types.ObjectId(commentId), createdAt: new Date(), replies: [] };
+    return { _id: storedComment._id, toObject: () => storedComment };
+  });
+  let replyComment;
+  mock.method(Comment, 'findOne', async () => {
+    const replies = [];
+    replies.id = () => null;
+    replies.push = (data) => Array.prototype.push.call(replies, {
+      ...data,
+      _id: new mongoose.Types.ObjectId(replyId),
+      createdAt: new Date(),
+    });
+    replyComment = {
+      _id: new mongoose.Types.ObjectId(commentId),
+      postId: new mongoose.Types.ObjectId(postId),
+      replies,
+      save: async () => {},
+    };
+    return replyComment;
+  });
+  const image = 'data:image/png;base64,AA==';
+
+  const createdComment = await createComment('user-1', postId, '正文', image);
+  const createdReply = await addReply('user-1', commentId, '回复', image);
+  storedComment.replies = replyComment.replies;
+  const events = eventList();
+  const commentEvent = events.find(({ event }) => event === 'comment-created').data.comment;
+  const replyEvent = events.find(({ event }) => event === 'reply-created').data.reply;
+
+  assert.match(createdComment.image, /^\/api\/media\/comments\/[a-f0-9]{24}\?v=/);
+  assert.equal(commentEvent.image, createdComment.image);
+  assert.match(createdReply.image, /^\/api\/media\/replies\/[a-f0-9]{24}\/[a-f0-9]{24}\?v=/);
+  assert.equal(replyEvent.image, createdReply.image);
+  assert.equal(JSON.stringify([createdComment, createdReply, commentEvent, replyEvent]).includes('data:image/'), false);
+  assert.equal(JSON.stringify([createdComment, createdReply, commentEvent, replyEvent]).includes('file:'), false);
+  assert.match(replyComment.replies[0].image, /^file:[a-f0-9]{64}\.png$/);
+
+  mock.method(Comment, 'find', () => ({
+    sort: () => ({ lean: async () => [storedComment] }),
+  }));
+  const fetched = await getComments(postId, 'user-1');
+  assert.equal(fetched[0].image, createdComment.image);
+  assert.equal(fetched[0].replies[0].image, createdReply.image);
+  assert.equal(JSON.stringify(fetched).includes('file:'), false);
 });
 
 test('public comment reads and writes reject a deleted parent post', async () => {
