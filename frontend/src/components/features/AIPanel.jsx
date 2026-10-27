@@ -1,6 +1,6 @@
 import React, { lazy, Suspense, useState, useEffect, useRef, useCallback } from 'react';
 import Icon from '../common/Icon';
-import useAIStore from '../../store/aiStore';
+import useAIStore, { findRegenerableAssistantIndex } from '../../store/aiStore';
 import useUiStore from '../../store/uiStore';
 
 const RichMessageContent = lazy(() => import('../common/RichMessageContent'));
@@ -48,7 +48,7 @@ function hasRichMessageSyntax(content = '') {
   return /```|`[^`]+`|^\s{0,3}#{1,6}\s|^\s{0,3}[-*+]\s|^\s{0,3}\d+\.\s|^\s{0,3}>\s|\|.+\||\[[^\]]+\]\([^)]+\)|\*\*[^*]+\*\*|__[^_]+__|!\[[^\]]*\]\([^)]+\)/m.test(content);
 }
 
-function MessageBubble({ message, isLastAssistant, onRegenerate }) {
+function MessageBubble({ message, canRegenerate, regenerateDisabled = false, onRegenerate }) {
   const [copied, setCopied] = useState(false);
   const [showActions, setShowActions] = useState(false);
 
@@ -82,11 +82,13 @@ function MessageBubble({ message, isLastAssistant, onRegenerate }) {
               <Icon name={copied ? 'check' : 'content_copy'} size={14} />
               <span>{copied ? '已复制' : '复制'}</span>
             </button>
-            {isLastAssistant && (
+            {canRegenerate && (
               <>
                 <span className="text-line">|</span>
                 <button
                   onClick={onRegenerate}
+                  disabled={regenerateDisabled}
+                  title={regenerateDisabled ? '请等待当前生成完成' : undefined}
                   className="flex items-center gap-1 text-xs text-text-3 hover:text-text transition-colors"
                   type="button"
                 >
@@ -112,24 +114,24 @@ function MessageBubble({ message, isLastAssistant, onRegenerate }) {
             <p className="my-0 whitespace-pre-wrap break-words">{message.content}</p>
           )}
         </div>
+        {message.status === 'interrupted' && (
+          <p className="mt-1 text-xs text-text-3">
+            {isAI ? '本轮已中断，已保留这段回答' : '本轮已中断'}
+          </p>
+        )}
       </div>
     </div>
   );
 }
 
-function SessionItem({ session, isActive, onClick, onDelete }) {
-  const [showDelete, setShowDelete] = useState(false);
-
+function SessionItem({ session, isActive, onClick, onDelete, deleteDisabled = false }) {
   return (
     <div
-      className={`relative p-3 rounded-lg cursor-pointer transition-colors ${
+      className={`relative group p-3 rounded-lg transition-colors ${
         isActive ? 'bg-blue-soft' : 'hover:bg-surface-soft'
       }`}
-      onClick={onClick}
-      onMouseEnter={() => setShowDelete(true)}
-      onMouseLeave={() => setShowDelete(false)}
     >
-      <div className="flex items-center justify-between">
+      <button type="button" className="block w-full pr-6 text-left" onClick={onClick} aria-current={isActive ? 'true' : undefined}>
         <div className="min-w-0 pr-2">
           <p className="text-sm font-medium text-text truncate">{session.title}</p>
           {session.hasPersonaOverride && (
@@ -138,22 +140,21 @@ function SessionItem({ session, isActive, onClick, onDelete }) {
             </span>
           )}
         </div>
-        {showDelete && (
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              if (window.confirm('确定要删除这个会话吗？')) {
-                onDelete();
-              }
-            }}
-            className="p-1 text-text-3 hover:text-red transition-colors"
-            type="button"
-          >
-            <Icon name="delete" size={16} />
-          </button>
-        )}
-      </div>
-      <p className="text-xs text-text-3 mt-1">{formatRelativeTime(session.updatedAt)}</p>
+        <p className="text-xs text-text-3 mt-1">{formatRelativeTime(session.updatedAt)}</p>
+      </button>
+      <button
+        disabled={deleteDisabled}
+        aria-label={`删除会话：${session.title}`}
+        onClick={() => {
+          if (window.confirm('确定要删除这个会话吗？')) {
+            onDelete();
+          }
+        }}
+        className="absolute top-3 right-3 p-1 text-text-3 hover:text-red transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100 max-sm:opacity-100"
+        type="button"
+      >
+        <Icon name="delete" size={16} />
+      </button>
     </div>
   );
 }
@@ -435,8 +436,11 @@ function AIPanel({ open, onClose }) {
     sessions,
     currentSession,
     messages,
+    sessionErrors,
+    activeRequestSessionId,
     showSessionList,
     isLoading,
+    isSessionSwitching,
     isPersonaViewOpen,
     isPersonaLoading,
     isPersonaSaving,
@@ -446,7 +450,7 @@ function AIPanel({ open, onClose }) {
     personaDraft,
     effectivePersona,
     personaDirty,
-    error,
+    error: globalError,
     fetchSessions,
     createSession,
     switchSession,
@@ -464,6 +468,14 @@ function AIPanel({ open, onClose }) {
     cancelActiveRequest,
     clearError,
   } = useAIStore();
+
+  const error = sessionErrors[currentSession?._id] || globalError;
+  const isGeneratingCurrentSession = isLoading
+    && activeRequestSessionId === (currentSession?._id || null);
+  const isGeneratingAnotherSession = isLoading && !isGeneratingCurrentSession;
+  const requestOriginTitle = sessions.find((session) => session._id === activeRequestSessionId)?.title
+    || (currentSession?._id === activeRequestSessionId ? currentSession.title : null)
+    || '另一个会话';
 
   useEffect(() => {
     let cancelled = false;
@@ -511,7 +523,7 @@ function AIPanel({ open, onClose }) {
 
   const handleSend = useCallback(async () => {
     const text = input.trim();
-    if (!text || isLoading) return;
+    if (!text || isLoading || isSessionSwitching) return;
 
     setInput('');
     try {
@@ -519,27 +531,27 @@ function AIPanel({ open, onClose }) {
     } catch {
       // Error handled in store.
     }
-  }, [input, isLoading, sendMessage]);
+  }, [input, isLoading, isSessionSwitching, sendMessage]);
 
   const handleSuggestedPromptClick = useCallback(async (prompt) => {
-    if (isLoading) return;
+    if (isLoading || isSessionSwitching) return;
 
     try {
       await sendMessage(prompt);
     } catch {
       // Error handled in store.
     }
-  }, [isLoading, sendMessage]);
+  }, [isLoading, isSessionSwitching, sendMessage]);
 
   const handleRegenerate = useCallback(async () => {
-    if (isLoading) return;
+    if (isLoading || isSessionSwitching) return;
 
     try {
       await regenerateMessage();
     } catch {
       // Error handled in store.
     }
-  }, [isLoading, regenerateMessage]);
+  }, [isLoading, isSessionSwitching, regenerateMessage]);
 
   const handleKeyDown = (e) => {
     if (e.key === 'Escape' && isLoading) {
@@ -621,10 +633,8 @@ function AIPanel({ open, onClose }) {
     }
   };
 
-  const lastAssistantIndex = [...messages].reverse().findIndex((m) => m.role === 'assistant');
-  const lastAssistantId = lastAssistantIndex >= 0
-    ? messages[messages.length - 1 - lastAssistantIndex]._id
-    : null;
+  const regenerableAssistantIndex = findRegenerableAssistantIndex(messages);
+  const regenerableAssistantId = messages[regenerableAssistantIndex]?._id || null;
 
   return (
     <div aria-hidden={!open} inert={open ? undefined : ''} className={`ai-slide-panel fixed inset-0 z-[100] ${open ? 'open pointer-events-auto' : 'pointer-events-none'}`}>
@@ -673,12 +683,22 @@ function AIPanel({ open, onClose }) {
               </div>
             </div>
 
+            {isGeneratingAnotherSession && (
+              <div role="status" className="mb-3 px-3 py-2 bg-blue-soft text-text-2 text-sm rounded-lg">
+                「{requestOriginTitle}」正在生成，回答会保存在该会话。你可以继续浏览；当前会话暂不能发送或重新生成。
+              </div>
+            )}
+            {isSessionSwitching && (
+              <div role="status" className="mb-3 text-xs text-text-3">正在加载会话记录…</div>
+            )}
+
             {showSessionList && (
               <div className="absolute inset-y-0 left-0 w-64 bg-surface border-r border-line z-10 p-4 flex flex-col">
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="font-semibold text-text">会话列表</h3>
                   <button
                     onClick={closeSessionList}
+                    aria-label="关闭会话列表"
                     className="p-1 text-text-3 hover:text-text"
                     type="button"
                   >
@@ -691,6 +711,7 @@ function AIPanel({ open, onClose }) {
                       key={session._id}
                       session={session}
                       isActive={session._id === currentSession?._id}
+                      deleteDisabled={isLoading || isSessionSwitching}
                       onClick={() => switchSession(session._id)}
                       onDelete={() => deleteSession(session._id)}
                     />
@@ -698,6 +719,7 @@ function AIPanel({ open, onClose }) {
                 </div>
                 <button
                   onClick={() => createSession()}
+                  disabled={isLoading || isSessionSwitching}
                   className="mt-4 w-full flex items-center justify-center gap-2 py-2 px-4 border border-line rounded-lg text-sm text-text hover:bg-surface-soft transition-colors"
                   type="button"
                 >
@@ -717,6 +739,7 @@ function AIPanel({ open, onClose }) {
                       type="button"
                       className="ai-suggestion-chip"
                       onClick={() => handleSuggestedPromptClick(prompt)}
+                      disabled={isLoading || isSessionSwitching}
                     >
                       {prompt}
                     </button>
@@ -730,12 +753,13 @@ function AIPanel({ open, onClose }) {
                 <MessageBubble
                   key={msg._id}
                   message={msg}
-                  isLastAssistant={msg._id === lastAssistantId}
+                  canRegenerate={msg._id === regenerableAssistantId}
+                  regenerateDisabled={isLoading || isSessionSwitching}
                   onRegenerate={handleRegenerate}
                 />
               ))}
               {/* In-progress streaming content */}
-              {isLoading && streamingContent && (
+              {isGeneratingCurrentSession && streamingContent && (
                 <div className="flex justify-start mb-4">
                   <div className="px-4 py-3 rounded-2xl bg-surface-soft rounded-tl-sm text-sm leading-relaxed whitespace-pre-wrap break-words max-w-[85%]">
                     {streamingContent}
@@ -743,7 +767,7 @@ function AIPanel({ open, onClose }) {
                   </div>
                 </div>
               )}
-              {isLoading && (
+              {isGeneratingCurrentSession && (
                 <div className="flex justify-start mb-4">
                   <div className="px-4 py-3 rounded-2xl bg-surface-soft rounded-tl-sm">
                     <div className="flex items-center gap-2">
@@ -754,7 +778,7 @@ function AIPanel({ open, onClose }) {
                   </div>
                 </div>
               )}
-              {toolStatus && (
+              {isGeneratingCurrentSession && toolStatus && (
                 <div className="flex justify-start mb-4">
                   <div className="px-4 py-2 rounded-2xl bg-surface-soft rounded-tl-sm text-sm text-text-2 flex items-center gap-2">
                     <span className="w-2 h-2 bg-yellow-400 rounded-full animate-pulse" />
@@ -784,7 +808,7 @@ function AIPanel({ open, onClose }) {
                 onCompositionStart={() => setIsComposing(true)}
                 onCompositionEnd={() => setIsComposing(false)}
                 onKeyDown={handleKeyDown}
-                disabled={isLoading}
+                disabled={isLoading || isSessionSwitching}
               />
               <button
                 className={`flex-shrink-0 h-10 px-4 inline-flex items-center justify-center gap-[7px] border-0 rounded-full text-white font-bold shadow-sm transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed ${
@@ -794,10 +818,17 @@ function AIPanel({ open, onClose }) {
                 }`}
                 onClick={isLoading ? cancelActiveRequest : handleSend}
                 type="button"
-                disabled={!isLoading && !input.trim()}
+                disabled={isLoading ? isStopping : (!input.trim() || isSessionSwitching)}
+                aria-label={isLoading
+                  ? (isGeneratingAnotherSession ? `停止「${requestOriginTitle}」的生成` : '停止当前生成')
+                  : '发送消息'}
               >
                 <Icon name={isLoading ? 'close' : 'send'} />
-                <span>{isLoading ? (isStopping ? '停止中' : '停止') : '发送'}</span>
+                <span>
+                  {isLoading
+                    ? (isStopping ? '停止中' : '停止')
+                    : '发送'}
+                </span>
               </button>
             </div>
         </>

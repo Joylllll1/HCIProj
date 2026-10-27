@@ -106,48 +106,52 @@ function parseSSEBuffer(buffer) {
 async function consumeSSE(response, { onStart, onToken, onToolCall, onToolResult, onDone, onError } = {}) {
   const reader = response.body?.getReader();
   if (!reader) {
-    onError?.('响应流不可用');
+    await onError?.('响应流不可用');
     return;
   }
 
   const decoder = new TextDecoder();
   let buffer = '';
+  let receivedTerminalEvent = false;
+
+  const dispatchEvents = async (events) => {
+    for (const data of events) {
+      switch (data.type) {
+        case 'start': await onStart?.(data.sessionId); break;
+        case 'token': await onToken?.(data.content); break;
+        case 'tool_call': await onToolCall?.(data.tool, data.args); break;
+        case 'tool_result': await onToolResult?.(data.tool); break;
+        case 'done':
+          receivedTerminalEvent = true;
+          await onDone?.();
+          break;
+        case 'error':
+          receivedTerminalEvent = true;
+          await onError?.(data.message);
+          break;
+      }
+    }
+  };
 
   for (;;) {
     const { done, value } = await reader.read();
     if (done) {
       buffer += decoder.decode();
+      if (buffer) {
+        const parsed = parseSSEBuffer(`${buffer}\n\n`);
+        await dispatchEvents(parsed.events);
+      }
       break;
     }
 
     buffer += decoder.decode(value, { stream: true });
     const parsed = parseSSEBuffer(buffer);
     buffer = parsed.remainder;
-
-    for (const data of parsed.events) {
-      switch (data.type) {
-        case 'start': onStart?.(data.sessionId); break;
-        case 'token': onToken?.(data.content); break;
-        case 'tool_call': onToolCall?.(data.tool, data.args); break;
-        case 'tool_result': onToolResult?.(data.tool); break;
-        case 'done': onDone?.(); break;
-        case 'error': onError?.(data.message); break;
-      }
-    }
+    await dispatchEvents(parsed.events);
   }
 
-  if (buffer) {
-    const parsed = parseSSEBuffer(`${buffer}\n\n`);
-    for (const data of parsed.events) {
-      switch (data.type) {
-        case 'start': onStart?.(data.sessionId); break;
-        case 'token': onToken?.(data.content); break;
-        case 'tool_call': onToolCall?.(data.tool, data.args); break;
-        case 'tool_result': onToolResult?.(data.tool); break;
-        case 'done': onDone?.(); break;
-        case 'error': onError?.(data.message); break;
-      }
-    }
+  if (!receivedTerminalEvent) {
+    await onError?.('生成流意外结束，已保留已生成内容');
   }
 }
 
@@ -161,7 +165,7 @@ export async function sendMessageStream(sessionId, message, { signal, context, r
 
   if (!response.ok) {
     const err = await response.json().catch(() => null);
-    onError?.(err?.error || err?.message || '请求失败');
+    await onError?.(err?.error || err?.message || '请求失败');
     return;
   }
 
@@ -178,7 +182,7 @@ export async function regenerateMessageStream(sessionId, { signal, requestId, on
 
   if (!response.ok) {
     const err = await response.json().catch(() => null);
-    onError?.(err?.error || err?.message || '请求失败');
+    await onError?.(err?.error || err?.message || '请求失败');
     return;
   }
 

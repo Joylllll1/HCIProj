@@ -508,7 +508,6 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 [data-theme="dark"] .text-white.bg-blue { color: var(--color-bg); }
 @media (max-width: 680px) {
   .theme-select { max-width: 77px; font-size: 11px; padding-inline: 2px; }
-  .topbar-actions .ai-topbar-btn { display: none; }
 }
 /* Theme changes are atomic so text and surfaces never pass through low contrast. */
 .theme-changing *, .theme-changing *::before, .theme-changing *::after { transition: none !important; }
