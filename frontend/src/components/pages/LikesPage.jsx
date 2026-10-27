@@ -1,5 +1,5 @@
 import PageHeader from '../common/PageHeader';
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useLayoutEffect } from 'react';
 import PostCard from '../common/PostCard';
 import EmptyState from '../common/EmptyState';
 import Icon from '../common/Icon';
@@ -231,11 +231,12 @@ function LikesPage({ compact, posts: allPosts, likedPosts: allLikedPosts, onOpen
   const visiblePosts = filteredPosts.slice(0, visiblePostCount);
   const visibleComments = filteredComments.slice(0, visibleCommentCount);
 
-  useEffect(() => {
+  // Reset before the list becomes interactive, so the first click is preserved.
+  useLayoutEffect(() => {
     setVisiblePostCount(LIKES_PAGE_BATCH_SIZE);
   }, [query, likesData?.posts, activeTab]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     setVisibleCommentCount(LIKES_PAGE_BATCH_SIZE);
   }, [query, likesData?.comments, activeTab]);
 
