@@ -45,6 +45,7 @@ export const getUserLikes = async (userId) => {
   const comments = [];
 
   for (const c of likedComments) {
+    if (!c.postId || c.postId.isDeleted) continue;
     const postTitle = c.postId?.title || '';
     const postIsDeleted = c.postId?.isDeleted || false;
 

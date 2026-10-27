@@ -73,9 +73,11 @@ export const createPost = async (userId, data) => {
 
   const post = await Post.create({
     ownerUserId: userId,
-    ...data,
     title: title || '无标题',
     content,
+    moodType: data.moodType,
+    mood: data.mood,
+    ...(data.campus === undefined ? {} : { campus: data.campus }),
     tags: tags.length > 0 ? tags : ['树洞'],
     images,
   });
