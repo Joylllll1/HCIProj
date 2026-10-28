@@ -8,6 +8,12 @@ import usePostStore from '../../store/postStore';
 import useUiStore from '../../store/uiStore';
 import { loadJSON, saveJSON } from '../../utils';
 
+const LOCAL_SEARCH_CONTEXTS = {
+  likes: { label: '搜索我的喜爱', placeholder: '搜索喜爱的帖子和评论...' },
+  bookmarks: { label: '搜索我的收藏', placeholder: '搜索收藏的帖子...' },
+  announcements: { label: '搜索校园公告', placeholder: '搜索校园活动...' },
+};
+
 function formatRelativeTime(date) {
   if (!date) return '';
   const now = Date.now();
@@ -51,6 +57,7 @@ function TopBar({ query, onQueryChange, onNavigate, onAIOpen }) {
 
   const activePage = useUiStore((s) => s.activePage);
   const requestFeedScroll = useUiStore((s) => s.requestFeedScroll);
+  const localSearchContext = LOCAL_SEARCH_CONTEXTS[activePage];
 
   // Track viewport width for mobile detection
   useEffect(() => {
@@ -71,9 +78,11 @@ function TopBar({ query, onQueryChange, onNavigate, onAIOpen }) {
     setHistoryOpen(false);
     setSearchExpanded(false);
     inputRef.current?.blur();
-    if (activePage !== 'home') onNavigate('home');
-    requestFeedScroll();
-  }, [inputQuery, onQueryChange, activePage, onNavigate, requestFeedScroll]);
+    if (!localSearchContext) {
+      if (activePage !== 'home') onNavigate('home');
+      requestFeedScroll();
+    }
+  }, [inputQuery, onQueryChange, activePage, localSearchContext, onNavigate, requestFeedScroll]);
   const collapseSearch = useCallback(() => { setSearchExpanded(false); setHistoryOpen(false); }, []);
   useEffect(() => {
     const shortcut = (event) => {
@@ -178,8 +187,9 @@ function TopBar({ query, onQueryChange, onNavigate, onAIOpen }) {
     else collapseSearch();
   };
 
-  const mobilePlaceholder = '搜索帖子、话题...';
-  const desktopPlaceholder = '搜索树洞或关键词 · ⌘ / Ctrl K';
+  const mobilePlaceholder = localSearchContext?.placeholder || '搜索帖子、话题...';
+  const desktopPlaceholder = localSearchContext?.placeholder || '搜索树洞或关键词 · ⌘ / Ctrl K';
+  const searchLabel = localSearchContext?.label || '搜索树洞';
 
   const isExpanded = isMobile && searchExpanded;
   const notificationModal = showNotifs
@@ -225,7 +235,7 @@ function TopBar({ query, onQueryChange, onNavigate, onAIOpen }) {
               ref={inputRef}
               onFocus={() => setHistoryOpen(true)}
               className="w-full border-0 outline-0 text-text bg-transparent text-sm"
-              aria-label="搜索树洞"
+              aria-label={searchLabel}
               onChange={(event) => setInputQuery(event.target.value)}
               placeholder={desktopPlaceholder}
               value={inputQuery}
@@ -250,7 +260,7 @@ function TopBar({ query, onQueryChange, onNavigate, onAIOpen }) {
               <input
                 ref={inputRef}
                 className="w-full border-0 outline-0 text-text bg-transparent text-sm"
-                aria-label="搜索树洞"
+                aria-label={searchLabel}
                 onFocus={() => { handleSearchFocus(); setHistoryOpen(true); }}
                 onChange={(event) => setInputQuery(event.target.value)}
                 placeholder={isMobile ? mobilePlaceholder : desktopPlaceholder}
