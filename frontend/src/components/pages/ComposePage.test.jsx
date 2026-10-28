@@ -21,7 +21,6 @@ vi.mock('../../services/draftService', () => ({
 
 vi.mock('../../utils/image', () => ({
   fileToOptimizedDataUrl: vi.fn(),
-  getImageGridLayout: vi.fn(() => ({ gridClass: 'grid-cols-3', itemClass: 'aspect-square' })),
   MAX_POST_IMAGES: 9,
 }));
 
@@ -321,6 +320,61 @@ describe('ComposePage', () => {
     fireEvent.change(screen.getByRole('textbox', { name: '树洞内容' }), { target: { value: '继续写正文' } });
     fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
     await waitFor(() => expect(draftService.updateDraft).toHaveBeenCalledWith('draft-1', expect.objectContaining({ images: [url] })));
+  });
+
+  it('opens the selected image, switches images, and preserves editor values after closing', async () => {
+    const images = ['/first-photo.jpg', '/second-photo.jpg'];
+    useUiStore.setState({ composeSeed: { content: '预览时保留的正文', images } });
+    render(<ComposePage onPublish={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole('button', {
+      name: '查看图片：待发布图片 2（第 2 张，共 2 张）',
+    }));
+
+    const dialog = await screen.findByRole('dialog', { name: '图片预览' });
+    expect(screen.getByText('2 / 2')).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: '预览图片 2' })).toHaveAttribute('src', images[1]);
+
+    fireEvent.click(screen.getByRole('button', { name: '上一张' }));
+    expect(screen.getByText('1 / 2')).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: '预览图片 1' })).toHaveAttribute('src', images[0]);
+
+    fireEvent.click(screen.getByRole('button', { name: '关闭预览' }));
+    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+    expect(screen.getByRole('textbox', { name: '树洞内容' })).toHaveValue('预览时保留的正文');
+    expect(screen.getAllByRole('img', { name: /待发布图片/ }).map((image) => image.getAttribute('src'))).toEqual(images);
+  });
+
+  it('previews a draft image restored from its same-origin media URL', async () => {
+    const mediaUrl = '/api/media/drafts/draft-1/0?v=photo';
+    draftService.fetchDraftById.mockResolvedValue(savedDraft('恢复的草稿正文', { images: [mediaUrl] }));
+    render(<ComposePage draftId="draft-1" onPublish={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole('button', {
+      name: '查看图片：待发布图片 1（第 1 张，共 1 张）',
+    }));
+
+    const preview = await screen.findByRole('img', { name: '预览图片 1' });
+    expect(preview).toHaveAttribute('src', mediaUrl);
+    fireEvent.click(screen.getByRole('button', { name: '关闭预览' }));
+    expect(screen.getByRole('textbox', { name: '树洞内容' })).toHaveValue('恢复的草稿正文');
+    expect(screen.getByRole('img', { name: '待发布图片 1' })).toHaveAttribute('src', mediaUrl);
+  });
+
+  it('deletes an image without opening preview or starting save or publish', async () => {
+    const onPublish = vi.fn();
+    useUiStore.setState({ composeSeed: { content: '保留的正文', images: ['/first-photo.jpg', '/second-photo.jpg'] } });
+    render(<ComposePage onPublish={onPublish} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '删除第 2 张图片' }));
+
+    expect(screen.queryByRole('dialog', { name: '图片预览' })).not.toBeInTheDocument();
+    expect(screen.getAllByRole('img', { name: /待发布图片/ }).map((image) => image.getAttribute('src'))).toEqual(['/first-photo.jpg']);
+    expect(screen.getByRole('textbox', { name: '树洞内容' })).toHaveValue('保留的正文');
+    expect(draftService.createDraft).not.toHaveBeenCalled();
+    expect(draftService.updateDraft).not.toHaveBeenCalled();
+    expect(draftService.publishDraft).not.toHaveBeenCalled();
+    expect(onPublish).not.toHaveBeenCalled();
   });
 
   it('maps duplicate uploaded images to separate saved positions and clears the dirty guard', async () => {

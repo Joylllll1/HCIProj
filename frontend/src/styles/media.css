@@ -12,10 +12,17 @@
 .post-media-badge { position: absolute; right: 7px; bottom: 7px; padding: 3px 6px; border-radius: 4px; background: oklch(.22 .008 325 / .84); color: oklch(.99 .002 325); font-size: 10px; line-height: 1.5; pointer-events: none; }
 .post-media figcaption { margin-top: 7px; font-size: 11px; color: var(--color-text-3); line-height: 1.6; }
 .post-media-open:focus-visible { outline: 2px solid var(--color-blue); outline-offset: -3px; }
-.editor-image-grid { max-width: 540px; }
-.editor-image-cell { min-width: 0; }
-.editor-image-cell:has(.editor-single-image) { display: grid; place-items: center; aspect-ratio: 4 / 3; width: 100%; max-width: 420px; }
-.editor-single-image { display: block; width: 100%; height: 100%; min-height: 0; object-fit: contain; }
+.editor-image-preview { padding: 12px; border-top: 1px solid var(--color-line-soft); background: var(--color-surface-soft); }
+.editor-image-hint { margin: 0 0 10px; color: var(--color-text-2); font-size: 12px; line-height: 1.6; }
+.editor-image-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); max-width: 540px; gap: 10px; }
+.editor-image-cell { position: relative; min-width: 0; aspect-ratio: 1; overflow: hidden; border: 1px solid var(--color-line-soft); border-radius: 6px; background: var(--color-surface); }
+.editor-image-cell .editor-image-open { display: grid; place-items: center; width: 100%; height: 100%; min-height: 0; border-radius: inherit; }
+.editor-image-preview .editor-image-thumbnail { display: block; width: 100%; height: 100%; min-height: 0; max-height: none; object-fit: contain; }
+.editor-image-remove { position: absolute; top: 6px; right: 6px; display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 1px solid oklch(1 0 0 / .3); border-radius: 50%; background: oklch(.18 .006 325 / .78); color: white; font-size: 17px; line-height: 1; cursor: pointer; }
+.editor-image-remove:hover { background: oklch(.12 .006 325 / .92); }
+.editor-image-add { display: grid; place-items: center; min-width: 0; aspect-ratio: 1; padding: 8px; border: 1px dashed var(--color-line); border-radius: 6px; background: var(--color-surface); color: var(--color-text-2); cursor: pointer; transition: color 150ms ease, border-color 150ms ease; }
+.editor-image-add:hover { border-color: var(--color-blue); color: var(--color-blue); }
+.editor-image-open:focus-visible { outline-offset: -3px; }
 
 /* Feedback stays inside each row, without moving text or shared separators. */
 .post-card:not(.post-detail) { transition: background-color 160ms ease-out, box-shadow 160ms ease-out; }
@@ -30,6 +37,8 @@
   .post-media-grid { gap: 4px; }
   .post-media-cell { border-radius: 5px; }
   .post-media-badge { right: 5px; bottom: 5px; }
+  .editor-image-preview { padding: 10px; }
+  .editor-image-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .post-card:not(.post-detail), .post-media .post-media-image { transition: none; }

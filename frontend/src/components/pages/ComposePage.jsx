@@ -4,7 +4,8 @@ import Icon from '../common/Icon';
 import useUiStore from '../../store/uiStore';
 import usePostStore from '../../store/postStore';
 import * as draftService from '../../services/draftService';
-import { fileToOptimizedDataUrl, getImageGridLayout, MAX_POST_IMAGES } from '../../utils/image';
+import ClickableImage from '../common/ClickableImage';
+import { fileToOptimizedDataUrl, MAX_POST_IMAGES } from '../../utils/image';
 
 const selectShowToast = (s) => s.showToast;
 const selectSetUnsavedChangesHandler = (s) => s.setUnsavedChangesHandler;
@@ -484,19 +485,23 @@ function ComposePage({ onPublish, draftId: initialDraftId }) {
           <span className="ml-auto text-text-3 text-[13px] font-bold">{content.length}/1000</span>
         </div>
         {images.length > 0 && (
-          <div className="editor-image-preview border-t border-line-soft bg-surface-soft p-3 max-sm:p-2">
-            <div className={`editor-image-grid grid gap-2 ${getImageGridLayout(images.length).gridClass}`}>
+          <div className="editor-image-preview">
+            <p className="editor-image-hint">点击图片可放大预览</p>
+            <div className="editor-image-grid" data-count={images.length}>
               {images.map((src, index) => (
-                <div key={`${src}-${index}`} className={`editor-image-cell relative overflow-hidden rounded-md bg-surface-soft ${getImageGridLayout(images.length).itemClass}`}>
-                  <img
+                <div key={`${src}-${index}`} className="editor-image-cell">
+                  <ClickableImage
                     src={src}
                     alt={`待发布图片 ${index + 1}`}
-                    className={images.length === 1 ? 'editor-single-image' : 'h-full w-full object-cover'}
+                    images={images}
+                    imageIndex={index}
+                    wrapperClassName="editor-image-open"
+                    className="editor-image-thumbnail"
                   />
                   <button
                     onClick={() => updateFormField('images', (current) => current.filter((_, i) => i !== index))}
                     type="button"
-                    className="editor-image-remove absolute top-2 right-2 grid w-7 h-7 place-items-center px-0 py-0 border-0 rounded-full bg-black/55 text-white text-lg cursor-pointer"
+                    className="editor-image-remove"
                     aria-label={`删除第 ${index + 1} 张图片`}
                   >
                     &times;
@@ -506,7 +511,7 @@ function ComposePage({ onPublish, draftId: initialDraftId }) {
               {images.length < MAX_POST_IMAGES && (
                 <button
                   type="button"
-                  className={`grid min-h-[100px] place-items-center rounded-md border border-dashed border-line-soft bg-surface text-text-2 transition-colors duration-150 hover:border-blue hover:text-blue ${getImageGridLayout(images.length + 1).itemClass}`}
+                  className="editor-image-add"
                   onClick={() => fileInputRef.current?.click()}
                 >
                   <span className="flex flex-col items-center gap-1 text-sm font-semibold">

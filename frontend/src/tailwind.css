@@ -649,19 +649,6 @@ h1, h2, h3, p {
   @apply opacity-100;
 }
 
-/* Editor image preview */
-.editor-image-preview {
-  @apply relative p-3 border-t border-line-soft bg-surface-soft;
-}
-
-.editor-image-preview img {
-  @apply w-full max-h-[200px] rounded-md object-cover;
-}
-
-.editor-image-remove {
-  @apply absolute top-4 right-6 grid w-7 h-7 place-items-center px-0 py-0 border-0 rounded-full bg-black/50 text-white text-lg cursor-pointer;
-}
-
 /* Report card - Warm palette */
 .report-card {
   @apply p-5 border rounded-xl bg-surface backdrop-blur-sm shadow-sm;
