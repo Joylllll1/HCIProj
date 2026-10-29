@@ -4,6 +4,7 @@ export async function fetchPosts(page = 1, query = '', options = {}) {
   const limit = Number.isFinite(options.limit) ? options.limit : 20;
   const params = new URLSearchParams({ page, limit });
   if (query) params.set('query', query);
+  if (options.tag) params.set('tag', options.tag);
   if (options.sort) params.set('sort', options.sort);
   return request(`/api/posts?${params}`);
 }

@@ -2,7 +2,9 @@ import * as commentService from '../services/commentService.js';
 
 export const create = async (req, res) => {
   const { postId, content, image, official } = req.body;
-  const comment = await commentService.createComment(req.user._id.toString(), postId, content, image, official);
+  const comment = await commentService.createComment(
+    req.user._id.toString(), postId, content, image, req.user.role === 'admin' && Boolean(official)
+  );
   res.status(201).json(comment);
 };
 
@@ -13,7 +15,7 @@ export const reply = async (req, res) => {
     req.params.commentId,
     content,
     image,
-    official,
+    req.user.role === 'admin' && Boolean(official),
     replyToId
   );
   res.status(201).json(reply);

@@ -3,8 +3,18 @@ import Post from '../models/Post.js';
 import AppError from '../utils/AppError.js';
 import { notifyComment } from './notificationService.js';
 import { syncPostCommentCount } from './commentCountService.js';
-import { normalizeInlineImage } from '../utils/image.js';
+import { storeInlineImage } from './imageStorage.js';
+import { serializeCommentMedia } from '../utils/media.js';
 import { broadcast } from './sseManager.js';
+
+function serializeReplyMedia(commentId, reply) {
+  return serializeCommentMedia({
+    _id: commentId,
+    id: commentId.toString(),
+    image: '',
+    replies: [reply],
+  }).replies[0];
+}
 
 function broadcastPostCommentStats(postId, comments) {
   try {
@@ -17,11 +27,23 @@ function broadcastPostCommentStats(postId, comments) {
   }
 }
 
+async function assertActivePost(postId) {
+  const post = await Post.exists({ _id: postId, isDeleted: false });
+  if (!post) throw new AppError('帖子不存在', 404, 'POST_NOT_FOUND');
+}
+
+async function getActiveComment(commentId) {
+  const comment = await Comment.findOne({ _id: commentId, isDeleted: false }).select('postId').lean();
+  if (!comment) throw new AppError('评论不存在', 404, 'COMMENT_NOT_FOUND');
+  await assertActivePost(comment.postId);
+  return comment;
+}
+
 export const createComment = async (userId, postId, content, image = '', official = false) => {
-  const post = await Post.findById(postId);
+  const post = await Post.findOne({ _id: postId, isDeleted: false });
   if (!post) throw new AppError('帖子不存在', 404, 'POST_NOT_FOUND');
   const normalizedContent = typeof content === 'string' ? content.trim() : '';
-  const normalizedImage = normalizeInlineImage(image, '评论图片');
+  const normalizedImage = await storeInlineImage(image, '评论图片');
 
   if (!normalizedContent && !normalizedImage) {
     throw new AppError('请输入内容或上传图片', 400, 'COMMENT_CONTENT_REQUIRED');
@@ -47,18 +69,18 @@ export const createComment = async (userId, postId, content, image = '', officia
     ).catch(() => {});
   }
 
-  const commentDto = {
+  const commentDto = serializeCommentMedia({
     ...comment.toObject(),
     id: comment._id.toString(),
     time: formatRelativeTime(comment.createdAt),
-  };
+  });
 
   try {
-    broadcastPostCommentStats(postId, visibleCommentCount);
     broadcast('comment-created', {
       postId: postId.toString(),
       comment: commentDto,
     });
+    broadcastPostCommentStats(postId, visibleCommentCount);
   } catch (error) {
     console.error('SSE broadcast failed after comment creation:', error);
   }
@@ -69,8 +91,9 @@ export const createComment = async (userId, postId, content, image = '', officia
 export const addReply = async (userId, commentId, content, image = '', official = false, replyToId = null) => {
   const comment = await Comment.findOne({ _id: commentId, isDeleted: false });
   if (!comment) throw new AppError('评论不存在', 404, 'COMMENT_NOT_FOUND');
+  await assertActivePost(comment.postId);
   const normalizedContent = typeof content === 'string' ? content.trim() : '';
-  const normalizedImage = normalizeInlineImage(image, '回复图片');
+  const normalizedImage = await storeInlineImage(image, '回复图片');
 
   if (!normalizedContent && !normalizedImage) {
     throw new AppError('请输入内容或上传图片', 400, 'REPLY_CONTENT_REQUIRED');
@@ -97,7 +120,8 @@ export const addReply = async (userId, commentId, content, image = '', official 
   const visibleCommentCount = await syncPostCommentCount(comment.postId);
 
   const savedReply = comment.replies[comment.replies.length - 1];
-  const replyDto = {
+  const replyDto = serializeReplyMedia(comment._id, {
+    _id: savedReply._id,
     id: savedReply._id.toString(),
     ownerUserId: savedReply.ownerUserId.toString(),
     content: savedReply.content,
@@ -109,15 +133,15 @@ export const addReply = async (userId, commentId, content, image = '', official 
     createdAt: savedReply.createdAt,
     time: formatRelativeTime(savedReply.createdAt),
     isLiked: false,
-  };
+  });
 
   try {
-    broadcastPostCommentStats(comment.postId, visibleCommentCount);
     broadcast('reply-created', {
       postId: comment.postId.toString(),
       commentId: comment._id.toString(),
       reply: replyDto,
     });
+    broadcastPostCommentStats(comment.postId, visibleCommentCount);
   } catch (error) {
     console.error('SSE broadcast failed after reply creation:', error);
   }
@@ -126,11 +150,12 @@ export const addReply = async (userId, commentId, content, image = '', official 
 };
 
 export const getComments = async (postId, userId) => {
+  await assertActivePost(postId);
   const comments = await Comment.find({ postId, isDeleted: false })
     .sort({ createdAt: -1 })
     .lean();
 
-  return comments.map((c) => ({
+  return comments.map((c) => serializeCommentMedia({
     ...c,
     id: c._id.toString(),
     time: formatRelativeTime(c.createdAt),
@@ -151,6 +176,7 @@ export const getComments = async (postId, userId) => {
 export const deleteComment = async (userId, commentId) => {
   const comment = await Comment.findOne({ _id: commentId, isDeleted: false });
   if (!comment) throw new AppError('评论不存在', 404, 'COMMENT_NOT_FOUND');
+  await assertActivePost(comment.postId);
   if (comment.ownerUserId.toString() !== userId) {
     throw new AppError('无权删除此评论', 403, 'FORBIDDEN');
   }
@@ -168,8 +194,8 @@ export const deleteComment = async (userId, commentId) => {
   };
 
   try {
-    broadcastPostCommentStats(comment.postId, visibleCommentCount);
     broadcast('comment-deleted', result);
+    broadcastPostCommentStats(comment.postId, visibleCommentCount);
   } catch (error) {
     console.error('SSE broadcast failed after comment deletion:', error);
   }
@@ -180,6 +206,7 @@ export const deleteComment = async (userId, commentId) => {
 export const deleteReply = async (userId, commentId, replyId) => {
   const comment = await Comment.findOne({ _id: commentId, isDeleted: false });
   if (!comment) throw new AppError('评论不存在', 404, 'COMMENT_NOT_FOUND');
+  await assertActivePost(comment.postId);
 
   const reply = comment.replies.id(replyId);
   if (!reply || reply.isDeleted) throw new AppError('回复不存在', 404, 'REPLY_NOT_FOUND');
@@ -199,8 +226,8 @@ export const deleteReply = async (userId, commentId, replyId) => {
   };
 
   try {
-    broadcastPostCommentStats(comment.postId, visibleCommentCount);
     broadcast('reply-deleted', result);
+    broadcastPostCommentStats(comment.postId, visibleCommentCount);
   } catch (error) {
     console.error('SSE broadcast failed after reply deletion:', error);
   }
@@ -209,6 +236,8 @@ export const deleteReply = async (userId, commentId, replyId) => {
 };
 
 export const toggleLike = async (userId, commentId) => {
+  await getActiveComment(commentId);
+
   const unlikedComment = await Comment.findOneAndUpdate(
     { _id: commentId, isDeleted: false, likedBy: userId },
     { $pull: { likedBy: userId }, $inc: { likes: -1 } },
@@ -239,6 +268,8 @@ export const toggleLike = async (userId, commentId) => {
 };
 
 export const toggleReplyLike = async (userId, commentId, replyId) => {
+  await getActiveComment(commentId);
+
   const unlikedComment = await Comment.findOneAndUpdate(
     {
       _id: commentId,

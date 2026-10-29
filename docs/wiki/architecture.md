@@ -114,11 +114,12 @@
 - `comment-deleted`：帖子详情页同步移除评论子树并更新评论数
 - `reply-created`：帖子详情页同步插入回复并更新评论数
 - `reply-deleted`：帖子详情页同步移除回复并更新评论数
+- `notification-updated`：目标用户刷新通知和未读数量，保留30秒轮询兜底
+- `post-stats-updated`：同步帖子点赞、收藏与评论计数
 
 当前未接入 SSE、仍保留轮询或显式刷新：
 
-- 通知中心：`30s` 轮询 + 页面重新可见时立即刷新
-- 点赞 / 收藏状态
+- 点赞 / 收藏的个人选择状态以用户接口响应为准
 - 活动相关更新
 
 ## 架构原则
@@ -164,10 +165,11 @@
   - `accessToken` 默认 15 分钟
   - `refreshToken` 默认 7 天
   - 受保护接口命中 `401` 时，前端会尝试静默刷新并重放一次原请求
+- 图片字节独立保存在 `IMAGE_STORAGE_DIR`（默认 `backend/storage/images/`），MongoDB 保存内容关联和内部文件引用。DTO 与 SSE 返回按资源权限检查的 `/api/media/...` 地址，图片 GET 使用 ETag 和按 Cookie 区分的私有缓存。旧 base64 数据仍能按需读取，迁移命令见 [图片存储](../image-storage.md)。
 
 ### 当前仍保留的历史/现实约束
 
 1. 前端尚未迁移到 React Router，页面切换与部分数据加载仍集中在 `App.jsx`
-2. 通知暂未接入 SSE，仍使用轮询策略
-3. 图片仍以内联 base64 Data URL 为主，列表接口存在传输偏重问题
+2. 通知采用 SSE 触发刷新与轮询兜底
+3. 图片使用后端本地文件目录，多实例共享存储与无引用文件清理仍待补充
 4. 若未来需要恢复浏览器侧跨域直连后端，需重新补齐 `credentials: 'include'`、精确 `cors(origin, credentials)`、cookie `sameSite/secure` 策略，以及对应部署文档

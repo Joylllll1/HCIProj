@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import DetailPage from './DetailPage';
 import useCommentStore from '../../store/commentStore';
 
@@ -19,9 +19,7 @@ vi.mock('../common/ReplyCard', () => ({
   default: ({ reply }) => <div>{reply.content}</div>,
 }));
 
-vi.mock('../common/ConfirmLeaveDialog', () => ({
-  default: () => null,
-}));
+afterEach(cleanup);
 
 const baseProps = {
   post: {
@@ -97,5 +95,21 @@ describe('DetailPage comment sorting', () => {
       'Older high-like comment',
       'Newest low-like comment',
     ]);
+  });
+
+  it('keeps the deletion dialog open after failure and blocks duplicate requests during retry', async () => {
+    let finish;
+    const remove = vi.fn().mockRejectedValueOnce(new Error('网络断开')).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    render(<DetailPage {...baseProps} isOwner onDelete={remove} />);
+    fireEvent.click(screen.getByRole('button', { name: '删除帖子', exact: true }));
+    fireEvent.click(screen.getByRole('button', { name: '确认删除' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('网络断开');
+    fireEvent.click(screen.getByRole('button', { name: '确认删除' }));
+    fireEvent.click(screen.getByRole('button', { name: '删除中…' }));
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(remove).toHaveBeenCalledTimes(2);
+    finish();
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
 });

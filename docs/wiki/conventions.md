@@ -19,15 +19,13 @@ docs/<简述>                # 文档更新，如 docs/p2-architecture
 
 ### 提交信息
 
-格式：`[AI-assisted]` 或 `[Human-written]` + 简述
+格式：`type(scope): description`
 
 ```
-[AI-assisted] feat(auth): 实现 JWT 登录接口
-[Human-written] fix(post): 修复帖子删除权限判断
-[AI-assisted] docs: 更新架构设计文档
+feat(auth): 实现 JWT 登录接口
+fix(post): 修复帖子删除权限判断
+docs: 更新架构设计文档
 ```
-
-**必须标注 AI 使用情况**（参见 AI 协作契约）。
 
 ### Code Review 流程
 

@@ -9,15 +9,29 @@ import { sendBanNotification, sendUnbanNotification } from './emailService.js';
 import { notifyBanned, notifyUnbanned } from './notificationService.js';
 import { syncPostCommentCount } from './commentCountService.js';
 import { broadcast } from './sseManager.js';
+import { serializeCommentMedia, serializePostMedia } from '../utils/media.js';
+
+function serializeReplyMedia(commentId, reply) {
+  return serializeCommentMedia({
+    _id: commentId,
+    id: commentId.toString(),
+    image: '',
+    replies: [reply.toObject ? reply.toObject() : reply],
+  }).replies[0];
+}
 
 async function resolveAssociatedPostId(targetId, targetType) {
   if (targetType === 'post') {
-    return targetId;
+    const post = await Post.findOne({ _id: targetId, isDeleted: false }).select('_id').lean();
+    if (!post) throw new AppError('举报内容不存在', 404, 'REPORT_TARGET_NOT_FOUND');
+    return post._id;
   }
+
+  let postId = null;
 
   if (targetType === 'comment') {
     const comment = await Comment.findOne({ _id: targetId, isDeleted: false }).select('postId').lean();
-    return comment?.postId || null;
+    postId = comment?.postId;
   }
 
   if (targetType === 'reply') {
@@ -25,10 +39,28 @@ async function resolveAssociatedPostId(targetId, targetType) {
       isDeleted: false,
       replies: { $elemMatch: { _id: targetId, isDeleted: { $ne: true } } },
     }).select('postId').lean();
-    return parentComment?.postId || null;
+    postId = parentComment?.postId;
   }
 
-  return null;
+  if (!postId || !['comment', 'reply'].includes(targetType)) {
+    throw new AppError('举报内容不存在', 404, 'REPORT_TARGET_NOT_FOUND');
+  }
+
+  const post = await Post.findOne({ _id: postId, isDeleted: false }).select('_id').lean();
+  if (!post) throw new AppError('举报内容不存在', 404, 'REPORT_TARGET_NOT_FOUND');
+  return post._id;
+}
+
+function broadcastAdminCommentDeletion(event, result, comments) {
+  try {
+    broadcast(event, result);
+    broadcast('post-stats-updated', {
+      postId: result.postId,
+      comments: Math.max(0, comments || 0),
+    });
+  } catch (error) {
+    console.error('SSE broadcast failed after admin comment deletion:', error);
+  }
 }
 
 async function getReplyIdsByUser(userId) {
@@ -85,7 +117,7 @@ async function countReportsAgainstUserContent(userId) {
 export async function getPendingReports() {
   // 获取待处理举报
   const reports = await Report.find({ status: 'pending' })
-    .populate('postId', 'title content ownerUserId isDeleted mood moodType createdAt')
+    .populate('postId', 'title content ownerUserId isDeleted mood moodType createdAt image images')
     .populate('reasons.reportedBy', 'email')
     .sort({ reportCount: -1, createdAt: -1 })
     .lean();
@@ -102,10 +134,15 @@ export async function getPendingReports() {
       let post = report.postId;
       if (!post && targetId) {
         post = await Post.findById(targetId)
-          .select('title content ownerUserId isDeleted mood moodType createdAt')
+          .select('title content ownerUserId isDeleted mood moodType createdAt image images')
           .lean();
       }
-      return { ...report, targetType: 'post', targetId, postId: post };
+      return {
+        ...report,
+        targetType: 'post',
+        targetId,
+        postId: post?._id ? serializePostMedia(post) : post,
+      };
     }
 
     // 评论/回复举报，获取评论/回复内容
@@ -143,7 +180,7 @@ export async function getPendingReports() {
       targetContent: target?.content || '[已删除]',
       targetOwnerUserId: target?.ownerUserId,
       targetCreatedAt: target?.createdAt,
-      postId: postInfo,
+      postId: postInfo?._id ? serializePostMedia(postInfo) : postInfo,
     };
   }));
 
@@ -151,6 +188,8 @@ export async function getPendingReports() {
 }
 
 export async function createReport(targetId, targetType, reason, reportedBy) {
+  const postId = await resolveAssociatedPostId(targetId, targetType);
+
   // 快速路径：同一用户已举报过该目标
   const existingReportByUser = await Report.findOne({
     targetId,
@@ -164,9 +203,6 @@ export async function createReport(targetId, targetType, reason, reportedBy) {
     error.code = 'ALREADY_REPORTED';
     throw error;
   }
-
-  // For comments/replies, find the associated post
-  const postId = await resolveAssociatedPostId(targetId, targetType);
 
   const update = {
     $inc: { reportCount: 1 },
@@ -503,7 +539,7 @@ export async function deletePost(postId, adminId, reason) {
     console.error('SSE broadcast failed after admin post deletion:', error);
   }
 
-  return post;
+  return serializePostMedia(post.toObject ? post.toObject() : post);
 }
 
 // ─── Comments Moderation ───
@@ -529,7 +565,7 @@ export async function deleteComment(commentId, adminId, reason) {
       ],
     });
 
-    await syncPostCommentCount(comment.postId);
+    const visibleCommentCount = await syncPostCommentCount(comment.postId);
 
     // Create audit log
     await AuditLog.create({
@@ -540,7 +576,13 @@ export async function deleteComment(commentId, adminId, reason) {
       reason,
     });
 
-    return comment;
+    broadcastAdminCommentDeletion('comment-deleted', {
+      postId: comment.postId.toString(),
+      commentId: comment._id.toString(),
+      deletedReplyCount: replyIds.length,
+    }, visibleCommentCount);
+
+    return serializeCommentMedia(comment.toObject ? comment.toObject() : comment);
   }
 
   // 如果不是独立评论，可能是嵌入的回复
@@ -564,7 +606,7 @@ export async function deleteComment(commentId, adminId, reason) {
   // Mark related reports as processed
   await Report.deleteMany({ targetId: commentId, targetType: 'reply', status: 'pending' });
 
-  await syncPostCommentCount(parentComment.postId);
+  const visibleCommentCount = await syncPostCommentCount(parentComment.postId);
 
   // Create audit log
   await AuditLog.create({
@@ -575,7 +617,13 @@ export async function deleteComment(commentId, adminId, reason) {
     reason,
   });
 
-  return reply;
+  broadcastAdminCommentDeletion('reply-deleted', {
+    postId: parentComment.postId.toString(),
+    commentId: parentComment._id.toString(),
+    replyId: reply._id.toString(),
+  }, visibleCommentCount);
+
+  return serializeReplyMedia(parentComment._id, reply);
 }
 
 // ─── Audit Logs ───

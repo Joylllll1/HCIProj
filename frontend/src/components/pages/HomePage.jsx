@@ -1,215 +1,110 @@
-import React, { useDeferredValue, useEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import Icon from '../common/Icon';
-import HeroCarousel from '../features/HeroCarousel';
+import Select from '../common/Select';
 import PostCard from '../common/PostCard';
-import EmptyState from '../common/EmptyState';
+import Discussion from '../common/Discussion';
+import QuickCompose, { FEED_TOPICS } from '../features/QuickCompose';
 import DailyFortune from '../features/DailyFortune';
 import usePostStore from '../../store/postStore';
 import useUiStore from '../../store/uiStore';
 import useAuthStore from '../../store/authStore';
+import useBookmarkStore from '../../store/bookmarkStore';
 import usePostActions from '../../hooks/usePostActions';
 import useLikeBookmark from '../../hooks/useLikeBookmark';
 import * as reportService from '../../services/reportService';
 
-// ─── Stable store selectors ───
-const selectLoading = (s) => s.loading;
-const selectGetPostLikeView = (s) => s.getPostLikeView;
-const selectPosts = (s) => s.posts;
-const selectFetchPosts = (s) => s.fetchPosts;
-const selectLoadMorePosts = (s) => s.loadMorePosts;
-const selectLoadingMore = (s) => s.loadingMore;
-const selectCurrentPage = (s) => s.currentPage;
-const selectTotalPages = (s) => s.totalPages;
-const selectTotalPosts = (s) => s.totalPosts;
-const selectQuery = (s) => s.query;
-const selectNavigate = (s) => s.navigate;
-const selectShowToast = (s) => s.showToast;
-
-const selectFeedScrollToken = (s) => s.feedScrollToken;
-
 export default function HomePage() {
-  const [sort, setSort] = useState('latest');
-  const [requestedSort, setRequestedSort] = useState('latest');
-  const feedHeadRef = useRef(null);
-
-  // ── Stores ──
-  const loading = usePostStore(selectLoading);
-  const loadingMore = usePostStore(selectLoadingMore);
-  const getPostLikeView = usePostStore(selectGetPostLikeView);
-  const posts = usePostStore(selectPosts);
-  const fetchPosts = usePostStore(selectFetchPosts);
-  const loadMorePosts = usePostStore(selectLoadMorePosts);
-  const currentPage = usePostStore(selectCurrentPage);
-  const totalPages = usePostStore(selectTotalPages);
-  const totalPosts = usePostStore(selectTotalPosts);
-  const query = useUiStore(selectQuery);
-  const navigate = useUiStore(selectNavigate);
-  const showToast = useUiStore(selectShowToast);
+  const feed = usePostStore();
+  const { query, feedTag, setQuery, setFeedTag, navigate, showToast, feedScrollToken } = useUiStore();
+  const { bookmarks, collectionFolders, bookmarkFolders } = useBookmarkStore();
   const user = useAuthStore((s) => s.user);
-  const feedScrollToken = useUiStore(selectFeedScrollToken);
-
-  // ── Hooks ──
+  const [pendingSort, setPendingSort] = useState(null);
+  const openIds = useUiStore((s) => s.expandedPostIds);
+  const [visitedIds, setVisitedIds] = useState(openIds);
+  const [retry, setRetry] = useState(0);
+  const feedHeadRef = useRef(null);
+  const moreRef = useRef(null);
   const { openPost } = usePostActions();
   const { toggleLike, toggleBookmark } = useLikeBookmark();
+  const { fetchPosts, currentSort } = feed;
+  useEffect(() => {
+    const state = usePostStore.getState();
+    if (state.feedLoaded && state.currentQuery === query && state.currentTag === feedTag && !retry) return;
+    fetchPosts(1, query, { sort: state.currentSort, tag: feedTag });
+  }, [query, feedTag, fetchPosts, retry]);
 
-  const userId = user?._id || null;
-  const deferredQuery = useDeferredValue(query);
-  const pendingSort = requestedSort !== sort ? requestedSort : null;
+  useLayoutEffect(() => {
+    const y = useUiStore.getState().homeScroll;
+    window.scrollTo(0, y);
+    const remember = () => useUiStore.setState({ homeScroll: window.scrollY });
+    window.addEventListener('scroll', remember, { passive: true });
+    return () => window.removeEventListener('scroll', remember);
+  }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    const targetSort = requestedSort;
-
-    const loadFeed = async () => {
-      await fetchPosts(1, deferredQuery, { sort: targetSort });
-      if (!cancelled && requestedSort === targetSort) {
-        setSort(targetSort);
-      }
-    };
-
-    loadFeed();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [deferredQuery, fetchPosts, requestedSort]);
-
-  // Scroll to feed section when search confirms from TopBar (mobile only)
-  useEffect(() => {
-    if (feedScrollToken > 0 && feedHeadRef.current && window.innerWidth < 640) {
-      const el = feedHeadRef.current;
-      const scrollToFeed = () => {
-        const topbar = document.querySelector('.topbar');
-        const topbarH = topbar ? topbar.getBoundingClientRect().height : 48;
-        el.style.scrollMarginTop = `${topbarH + 4}px`;
-        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      };
-      // On mobile the keyboard closes after search confirm, which resizes
-      // the viewport. Wait for that animation to finish before scrolling.
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          scrollToFeed();
-          // Re-scroll after keyboard-close viewport change settles
-          setTimeout(scrollToFeed, 250);
-        });
-      });
-      useUiStore.setState({ feedScrollToken: 0 });
-    }
+    if (!feedScrollToken) return;
+    feedHeadRef.current?.scrollIntoView({ block: 'start' });
+    useUiStore.setState({ feedScrollToken: 0 });
   }, [feedScrollToken]);
 
-  const handleReport = async (postId, reason, targetType = 'post') => {
-    try {
-      await reportService.createReport(postId, reason, targetType);
-      showToast('举报已提交');
-    } catch (err) {
-      showToast(err.message || '举报失败');
-    }
-  };
+  useEffect(() => {
+    if (!moreRef.current || !window.IntersectionObserver || feed.loading || feed.loadingMore || feed.moreError || feed.feedError) return;
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting) usePostStore.getState().loadMorePosts();
+    }, { rootMargin: '160px' });
+    observer.observe(moreRef.current);
+    return () => observer.disconnect();
+  }, [feed.currentPage, feed.totalPages, feed.loading, feed.loadingMore, feed.moreError, feed.feedError]);
 
+  const changeSort = async (sort) => {
+    if (pendingSort || sort === currentSort) return;
+    setPendingSort(sort);
+    await fetchPosts(1, query, { sort, tag: feedTag });
+    setPendingSort(null);
+  };
+  const toggleDiscussion = (id) => {
+    setVisitedIds((ids) => ids.includes(id) ? ids : [...ids, id]);
+    useUiStore.setState((s) => ({ expandedPostIds: s.expandedPostIds.includes(id) ? s.expandedPostIds.filter((item) => item !== id) : [...s.expandedPostIds, id] }));
+  };
+  const report = async (id, reason, type = 'post') => {
+    try { await reportService.createReport(id, reason, type); showToast('举报已提交'); }
+    catch (err) { showToast(err.message || '举报失败'); }
+  };
+  const topics = FEED_TOPICS.map((tag) => <button key={tag} type="button" className={`topic-link ${feedTag === tag ? 'selected' : ''}`} aria-pressed={feedTag === tag} onClick={() => setFeedTag(feedTag === tag ? '' : tag)}><span className="topic-hash">#</span>{tag}<Icon name="chevron_right" /></button>);
+  const stale = feed.currentQuery !== query || feed.currentTag !== feedTag;
   return (
-    <div className="home-grid grid grid-cols-[minmax(0,1fr)_320px] gap-5 max-w-[1380px] mx-auto max-lg:grid-cols-1">
-      <section className="min-w-0">
-        <HeroCarousel onNavigate={navigate} />
-        <div className="overview-strip grid grid-cols-3 gap-3.5 mt-[18px] max-lg:grid-cols-1">
-          <article className="overview-card p-4 rounded-md border border-line bg-white/80 shadow-xs">
-            <span className="overview-label inline-block mb-1.5 text-blue text-[11px] font-bold tracking-widest uppercase">匿名表达</span>
-            <strong className="block text-[17px] tracking-tight">同帖稳定 · 跨帖不可关联</strong>
-            <p className="mt-1.5 mb-0 text-text-2 text-[13px] leading-relaxed">减少熟人压力，同时保留讨论连续性。</p>
-          </article>
-          <article className="overview-card p-4 rounded-md border border-line bg-white/80 shadow-xs">
-            <span className="overview-label inline-block mb-1.5 text-blue text-[11px] font-bold tracking-widest uppercase">内容组织</span>
-            <strong className="block text-[17px] tracking-tight">标签、搜索、收藏</strong>
-            <p className="mt-1.5 mb-0 text-text-2 text-[13px] leading-relaxed">用更低成本找到真正相关的内容和情绪。</p>
-          </article>
-          <article className="overview-card p-4 rounded-md border border-line bg-white/80 shadow-xs">
-            <span className="overview-label inline-block mb-1.5 text-blue text-[11px] font-bold tracking-widest uppercase">社区治理</span>
-            <strong className="block text-[17px] tracking-tight">举报与后台追责</strong>
-            <p className="mt-1.5 mb-0 text-text-2 text-[13px] leading-relaxed">匿名不等于失控，平台仍然可治理、可审计。</p>
-          </article>
-        </div>
-        <div className="section-head flex items-end justify-between gap-[18px] mt-[30px] mb-[18px] max-sm:flex-col max-sm:items-stretch">
-          <div>
-            <p className="eyebrow mb-1.5 text-blue text-xs font-bold tracking-widest uppercase">Anonymous Feed</p>
-            <h1 className="m-0 text-[clamp(30px,4.2vw,44px)] leading-[1.1] tracking-tight">全站动态</h1>
+    <div className="home-grid">
+      <section className="feed-column" aria-label="树洞信息流">
+        <QuickCompose />
+        <div className="feed-toolbar" ref={feedHeadRef}>
+          <div className="feed-tabs" aria-label="动态排序">
+            {[['latest', '最新发布'], ['hot', '高赞共鸣']].map(([value, label]) => <button type="button" key={value} className={`feed-tab ${currentSort === value ? 'selected' : ''}`} aria-pressed={currentSort === value} disabled={Boolean(pendingSort)} onClick={() => changeSort(value)}>{pendingSort === value ? `${label} · 加载中` : label}</button>)}
           </div>
-          <div ref={feedHeadRef} className="tabs flex flex-wrap gap-2 max-sm:w-full" aria-label="动态排序">
-            {[
-              ['latest', '最新发布'],
-              ['hot', '高赞共鸣'],
-            ].map(([key, label]) => (
-              <button
-                className={`rounded-full px-[14px] py-2 text-[13px] font-semibold transition-all duration-150 ${
-                  sort === key
-                    ? 'bg-blue-soft text-blue border border-blue'
-                    : 'bg-white text-text-2 border border-line hover:border-[#b0c4de] hover:text-blue'
-                } ${pendingSort === key ? 'opacity-75 cursor-wait' : ''} max-sm:flex-1`}
-                key={key}
-                onClick={() => {
-                  if (pendingSort || sort === key) return;
-                  setRequestedSort(key);
-                }}
-                disabled={Boolean(pendingSort)}
-                type="button"
-              >
-                {pendingSort === key ? `${label} · 加载中` : label}
-              </button>
-            ))}
-          </div>
+          <Select className="feed-tag-select" aria-label="筛选话题" value={feedTag} onChange={setFeedTag} options={[{ value: '', label: '不限话题' }, ...FEED_TOPICS.map(tag => ({ value: tag, label: tag, group: '常用话题' }))]} />
+          <button className="icon-button feed-refresh" type="button" aria-label="刷新树洞" title="刷新树洞" aria-busy={feed.loading} disabled={feed.loading} onClick={() => setRetry((n) => n + 1)}><Icon name="refresh" /></button>
         </div>
-        {query && (
-          <p className="result-hint mb-[14px] text-text-2 text-sm">
-            搜索 &quot;{query}&quot; 找到 {totalPosts} 条相关树洞。
-          </p>
-        )}
-        <div className="post-list grid gap-4">
-          {loading ? (
-            <div className="flex items-center justify-center py-16 text-text-3">
-              <Icon name="hourglass_empty" className="mr-2" />
-              加载中...
-            </div>
-          ) : posts.length > 0 ? (
-            <>
-              {posts.map((post) => {
-                const postView = getPostLikeView(post);
-                return (
-                  <PostCard
-                    key={postView.id}
-                    post={postView}
-                    onOpen={() => openPost(post)}
-                    previewMode
-                    liked={postView.isLiked}
-                    bookmarked={postView.isSaved}
-                    onLike={() => toggleLike(post.id)}
-                    onBookmark={() => toggleBookmark(post.id)}
-                    onReport={handleReport}
-                  />
-                );
-              })}
-              {currentPage < totalPages && (
-                <div className="pt-2">
-                  <button
-                    type="button"
-                    onClick={() => loadMorePosts()}
-                    disabled={loadingMore}
-                    className="secondary-button w-full disabled:opacity-60 disabled:cursor-not-allowed"
-                  >
-                    {loadingMore ? '加载中...' : '加载更多'}
-                  </button>
-                </div>
-              )}
-            </>
-          ) : (
-            <EmptyState
-              title={query ? '没有找到相关树洞' : '树洞里暂时没有相关话题'}
-              description={query ? '试试换个关键词。' : '发布第一条树洞吧！'}
-            />
-          )}
+        {(query || feedTag) && <div className="feed-search-result" role="status"><span>{query && `搜索“${query}”`}{query && feedTag && ' · '}{feedTag && `#${feedTag}`}{!stale && !feed.loading && ` · ${feed.totalPosts} 条`}</span><button type="button" onClick={() => { setQuery(''); setFeedTag(''); }}>清除筛选 <Icon name="close" /></button></div>}
+        {feed.feedError && <div className="feed-error" role="alert"><span>{feed.feedError}{feed.posts.length > 0 && ' 当前保留上次加载的内容。'}</span><button type="button" onClick={() => feed.retryFeed()}>重新加载</button></div>}
+        <h2 className="sr-only">树洞列表</h2>
+        <div className="post-list" aria-busy={feed.loading}>
+          {feed.loading && <p className="feed-loading" role="status">正在更新树洞…</p>}
+          {feed.posts.map((post) => {
+            const view = feed.getPostLikeView(post);
+            const expanded = openIds.includes(post.id);
+            return <div className="feed-thread" key={post.id}>
+              <PostCard post={view} onOpen={() => openPost(post)} onDiscuss={() => toggleDiscussion(post.id)} expanded={expanded} previewMode liked={view.isLiked} bookmarked={view.isSaved} onLike={() => toggleLike(post.id)} onBookmark={() => toggleBookmark(post.id)} onReport={report} />
+              {visitedIds.includes(post.id) && <div hidden={!expanded} id={`discussion-${post.id}`} className="inline-discussion"><Discussion post={post} currentUserId={user?._id} onReport={report} /><div className="discussion-bottom"><button type="button" onClick={() => { toggleDiscussion(post.id); document.getElementById(`discuss-${post.id}`)?.focus(); }}>收起评论</button><button type="button" onClick={() => openPost(post)}>打开完整树洞 <Icon name="arrow_forward" /></button></div></div>}
+            </div>;
+          })}
+          {!feed.posts.length && !feed.loading && !feed.feedError && <div className="feed-empty"><p>{query || feedTag ? '没有找到相关树洞，换个关键词或话题试试。' : '还没有树洞，写下第一条校园日常吧。'}</p>{(query || feedTag) && <button className="secondary-button" type="button" onClick={() => { setQuery(''); setFeedTag(''); }}>查看全部树洞</button>}</div>}
+          {feed.currentPage < feed.totalPages && !stale ? <div className="feed-more" ref={moreRef}>{feed.moreError && <p role="alert" className="inline-error">{feed.moreError}</p>}<button type="button" className="secondary-button" disabled={feed.loadingMore || feed.loading} onClick={() => feed.loadMorePosts()}>{feed.loadingMore ? '加载中...' : feed.moreError ? '重试加载更多' : '加载更多'}</button></div> : feed.posts.length > 0 && <p className="feed-end">已看完 · {feed.totalPosts} 条树洞</p>}
         </div>
       </section>
-      <aside className="self-start">
-        <div className="sticky top-[80px] grid gap-4 max-lg:static max-lg:grid-cols-3 max-sm:grid-cols-1">
-          <DailyFortune userId={userId} showToast={showToast} />
-        </div>
+      <aside className="community-rail" aria-label="校园与个人空间">
+        <section className="rail-section"><div className="rail-heading"><h2>我的收藏夹</h2><Icon name="bookmark_border" /></div><div className="rail-folders">{collectionFolders.map((folder) => <button type="button" key={folder.id} onClick={() => navigate('bookmarks', { bookmarkFolder: folder.id })}><Icon name="folder" /><span>{folder.name}</span><small>{folder.id === 'all' ? bookmarks.length : (bookmarkFolders[folder.id] || []).filter((id) => bookmarks.includes(id)).length}</small></button>)}</div></section>
+        <section className="rail-section"><div className="rail-heading"><h2>常用话题</h2><Icon name="tag" /></div><div className="rail-topics">{topics}</div></section>
+        <details className="rail-section fortune-section"><summary>今日运势</summary><DailyFortune showToast={showToast} /></details>
+        <p className="rail-footer">南大树洞 · NJU Treehole<br />友善表达，尊重每一种声音。</p>
       </aside>
     </div>
   );

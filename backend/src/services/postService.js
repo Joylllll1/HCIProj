@@ -3,7 +3,8 @@ import AppError from '../utils/AppError.js';
 import { notifyLike } from './notificationService.js';
 import { broadcast } from './sseManager.js';
 import { getVisibleCommentCounts, getVisibleCommentCount } from './commentCountService.js';
-import { normalizeInlineImages } from '../utils/image.js';
+import { storeInlineImages } from './imageStorage.js';
+import { serializePostMedia } from '../utils/media.js';
 
 function escapeRegex(value = '') {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -38,7 +39,7 @@ function toPostDto(post, userId) {
       ? [post.image]
       : [];
 
-  return {
+  return serializePostMedia({
     ...post,
     tags: Array.isArray(post.tags) ? post.tags : [],
     image: images[0] || '',
@@ -50,7 +51,7 @@ function toPostDto(post, userId) {
     saves: post.saves || 0,
     isLiked: userId ? post.likedBy?.some((id) => id.toString() === userId) : false,
     isSaved: userId ? post.savedBy?.some((id) => id.toString() === userId) : false,
-  };
+  });
 }
 
 export const createPost = async (userId, data) => {
@@ -60,7 +61,7 @@ export const createPost = async (userId, data) => {
       ? [data.image]
       : [];
 
-  const images = normalizeInlineImages(sourceImages, { label: '帖子图片' });
+  const images = await storeInlineImages(sourceImages, { label: '帖子图片' });
   const title = typeof data.title === 'string' ? data.title.trim() : '';
   const content = typeof data.content === 'string' ? data.content.trim() : '';
   const tags = Array.isArray(data.tags)
@@ -73,9 +74,11 @@ export const createPost = async (userId, data) => {
 
   const post = await Post.create({
     ownerUserId: userId,
-    ...data,
     title: title || '无标题',
     content,
+    moodType: data.moodType,
+    mood: data.mood,
+    ...(data.campus === undefined ? {} : { campus: data.campus }),
     tags: tags.length > 0 ? tags : ['树洞'],
     images,
   });
@@ -87,7 +90,7 @@ export const createPost = async (userId, data) => {
   return toPostDto(post.toObject(), userId);
 };
 
-export const getPosts = async ({ page = 1, limit = 20, query, sort = 'latest', userId } = {}) => {
+export const getPosts = async ({ page = 1, limit = 20, query, tag, sort = 'latest', userId } = {}) => {
   const filter = { isDeleted: false };
   if (query && query.trim()) {
     const pattern = new RegExp(escapeRegex(query.trim()), 'i');
@@ -97,6 +100,8 @@ export const getPosts = async ({ page = 1, limit = 20, query, sort = 'latest', u
       { tags: pattern },
     ];
   }
+
+  if (typeof tag === 'string' && tag.trim()) filter.tags = tag.trim();
 
   const skip = (page - 1) * limit;
   const sortSpec = resolveFeedSort(sort);

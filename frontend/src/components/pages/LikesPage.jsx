@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import PageHeader from '../common/PageHeader';
+import React, { useState, useEffect, useLayoutEffect } from 'react';
 import PostCard from '../common/PostCard';
 import EmptyState from '../common/EmptyState';
 import Icon from '../common/Icon';
@@ -27,6 +28,7 @@ function LikesPage({ compact, posts: allPosts, likedPosts: allLikedPosts, onOpen
   const [likesData, setLikesData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [retryToken, setRetryToken] = useState(0);
   const [visiblePostCount, setVisiblePostCount] = useState(LIKES_PAGE_BATCH_SIZE);
   const [visibleCommentCount, setVisibleCommentCount] = useState(LIKES_PAGE_BATCH_SIZE);
   const showToast = useUiStore((s) => s.showToast);
@@ -147,14 +149,15 @@ function LikesPage({ compact, posts: allPosts, likedPosts: allLikedPosts, onOpen
   };
 
   useEffect(() => {
+    let cancelled = false;
     setLoading(true);
     setError(null);
     fetchLikes()
       .then((data) => {
-        setLikesData(data);
+        if (!cancelled) setLikesData(data);
       })
       .catch((e) => {
-        console.error('fetchLikes error:', e);
+        if (cancelled) return;
         if (e.status === 401) {
           setError('请先登录');
         } else {
@@ -162,9 +165,10 @@ function LikesPage({ compact, posts: allPosts, likedPosts: allLikedPosts, onOpen
         }
       })
       .finally(() => {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       });
-  }, []);
+    return () => { cancelled = true; };
+  }, [retryToken]);
 
   const handlePostUnlike = (postId) => {
     togglePendingPostUnlike(postId);
@@ -227,33 +231,29 @@ function LikesPage({ compact, posts: allPosts, likedPosts: allLikedPosts, onOpen
   const visiblePosts = filteredPosts.slice(0, visiblePostCount);
   const visibleComments = filteredComments.slice(0, visibleCommentCount);
 
-  useEffect(() => {
+  // Reset before the list becomes interactive, so the first click is preserved.
+  useLayoutEffect(() => {
     setVisiblePostCount(LIKES_PAGE_BATCH_SIZE);
   }, [query, likesData?.posts, activeTab]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     setVisibleCommentCount(LIKES_PAGE_BATCH_SIZE);
   }, [query, likesData?.comments, activeTab]);
 
   return (
-    <div className="collection-page max-w-[1180px] mx-auto">
+    <div className="collection-page likes-page">
       {!compact && (
-        <section className="collection-hero">
-          <div>
-            <p className="eyebrow mb-[18px] text-blue text-xs font-bold tracking-widest uppercase">My Likes</p>
-            <h1 className="m-0 text-[clamp(30px,4.2vw,44px)] leading-[1.1] tracking-tight">我的喜爱</h1>
-            <p className="mt-[9px] mb-0 text-text-2 leading-relaxed">回顾你在树洞中点赞过的精彩内容。</p>
-          </div>
-        </section>
+        <PageHeader title="我的喜爱" description="回看你点赞过的帖子和评论。" />
       )}
 
-      <div className="category-row flex flex-wrap gap-3 my-[22px]">
+      <div className="category-row collection-tabs flex flex-wrap gap-3 my-[22px]">
         <button
           className={`rounded-full px-4 py-[10px] text-sm font-semibold shadow-xs transition-all duration-200 active:scale-95 ${
             activeTab === 'posts'
               ? 'bg-blue-soft text-blue border border-blue'
-              : 'bg-white text-text-2 border border-line hover:border-[#b0c4de] hover:text-blue'
+              : 'bg-surface text-text-2 border border-line hover:border-[#b0c4de] hover:text-blue'
           }`}
+          aria-pressed={activeTab === 'posts'}
           onClick={() => handleTabChange('posts')}
         >
           帖子
@@ -262,8 +262,9 @@ function LikesPage({ compact, posts: allPosts, likedPosts: allLikedPosts, onOpen
           className={`rounded-full px-4 py-[10px] text-sm font-semibold shadow-xs transition-all duration-200 active:scale-95 ${
             activeTab === 'comments'
               ? 'bg-blue-soft text-blue border border-blue'
-              : 'bg-white text-text-2 border border-line hover:border-[#b0c4de] hover:text-blue'
+              : 'bg-surface text-text-2 border border-line hover:border-[#b0c4de] hover:text-blue'
           }`}
+          aria-pressed={activeTab === 'comments'}
           onClick={() => handleTabChange('comments')}
         >
           评论
@@ -277,18 +278,18 @@ function LikesPage({ compact, posts: allPosts, likedPosts: allLikedPosts, onOpen
       )}
 
       {loading ? (
-        <div className="py-10 text-center text-text-3">加载中...</div>
+        <div className="py-10 text-center text-text-3" role="status">加载中...</div>
       ) : error ? (
-        <EmptyState title="加载失败" description={error} />
+        <div className="feed-error" role="alert"><span>{error}</span><button type="button" onClick={() => setRetryToken((value) => value + 1)}>重新加载喜爱</button></div>
       ) : activeTab === 'posts' ? (
         filteredPosts.length === 0 ? (
           <EmptyState title={searching ? '没有找到匹配的点赞帖子' : '还没有赞过的帖子'} />
         ) : (
           <>
-            <section className="masonry-grid [column-count:2] [column-gap:18px] max-sm:[column-count:1] max-sm:[column-gap:12px]">
+            <section className="saved-post-list">
               {visiblePosts.map((post) => {
                 return (
-                  <div key={post.id} className="inline-block w-full mb-[18px]">
+                  <div key={post.id} className="saved-post-entry">
                     <PostCard
                       compact
                       post={post}
@@ -333,15 +334,16 @@ function LikesPage({ compact, posts: allPosts, likedPosts: allLikedPosts, onOpen
                 return (
                   <div
                     key={comment.item?.id || `${comment.postId}-${comment.type}-${i}`}
-                    className="comment-card p-4 border border-line rounded-xl bg-white hover:shadow-sm transition-all"
+                    className="comment-card p-4 border border-line rounded-xl bg-surface hover:shadow-sm transition-all"
                   >
                     <div className="flex justify-between items-start mb-2">
-                      <span
-                        className={`text-xs font-medium cursor-pointer hover:text-blue ${postIsDeleted ? 'text-text-3 line-through' : 'text-text-3'}`}
+                      <button
+                        type="button"
+                        className={`liked-comment-source text-xs font-medium cursor-pointer hover:text-blue ${postIsDeleted ? 'text-text-3 line-through' : 'text-text-3'}`}
                         onClick={() => handleOpenCommentPost(comment)}
                       >
                         来自：{postIsDeleted ? '[已删除]' : (post?.title || comment.postTitle || '无标题')}
-                      </span>
+                      </button>
                     </div>
                     <ExpandableText
                       className="mb-2 text-sm text-text-2"

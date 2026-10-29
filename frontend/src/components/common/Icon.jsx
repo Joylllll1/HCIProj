@@ -2,6 +2,10 @@ import React from 'react';
 
 const Icon = ({ name, filled = false, className = '', size, style }) => {
   const paths = {
+    sun: 'M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0ZM12 2v2m0 16v2M2 12h2m16 0h2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4',
+    moon: 'M20 14.2A8.3 8.3 0 0 1 9.8 4a8.4 8.4 0 1 0 10.2 10.2Z',
+    folder: 'M3 7V5h6l2 2h10v12H3V7Z',
+    link: 'M10 13a4 4 0 0 0 6 0l3-3a4 4 0 0 0-6-6l-2 2M14 11a4 4 0 0 0-6 0l-3 3a4 4 0 0 0 6 6l2-2',
     dynamic_feed: 'M4 5.5h16M4 12h10M4 18.5h13',
     campaign: 'M5 13h3l8 4V7l-8 4H5v2Zm3 0v5',
     bookmark: 'M7 5h10v15l-5-3-5 3V5Z',
@@ -62,18 +66,18 @@ const Icon = ({ name, filled = false, className = '', size, style }) => {
     home: 'M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z',
     description: 'M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z',
     menu: 'M3 6h18M3 12h18M3 18h18',
+    more_horiz: 'M5 12h.01M12 12h.01M19 12h.01',
     settings: 'M19.1 12.9c.04-.3.07-.6.07-.9s-.03-.6-.08-.9l2.11-1.65a.5.5 0 0 0 .12-.64l-2-3.46a.5.5 0 0 0-.6-.22l-2.49 1a7.03 7.03 0 0 0-1.56-.9l-.38-2.65a.5.5 0 0 0-.5-.42h-4a.5.5 0 0 0-.5.42l-.38 2.65c-.56.23-1.08.53-1.56.9l-2.49-1a.5.5 0 0 0-.6.22l-2 3.46a.5.5 0 0 0 .12.64l2.11 1.65c-.05.3-.08.6-.08.9s.03.6.08.9L2.2 14.55a.5.5 0 0 0-.12.64l2 3.46a.5.5 0 0 0 .6.22l2.49-1c.48.37 1 .67 1.56.9l.38 2.65a.5.5 0 0 0 .5.42h4a.5.5 0 0 0 .5-.42l.38-2.65c.56-.23 1.08-.53 1.56-.9l2.49 1a.5.5 0 0 0 .6-.22l2-3.46a.5.5 0 0 0-.12-.64zM12 15.5A3.5 3.5 0 1 1 12 8a3.5 3.5 0 0 1 0 7.5z',
-    refresh: 'M17.65 6.35A7.958 7.958 0 0 0 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0 1 12 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z',
+    refresh: 'M20 11a8 8 0 1 0-2 6M20 4v7h-7',
     content_copy: 'M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z',
   };
 
-  const iconStyle = size
-    ? {
-      width: size,
-      height: size,
-      ...style,
-    }
-    : style;
+  // Legacy callers used fontSize for icon sizing; SVGs need explicit dimensions.
+  const requestedSize = size ?? style?.fontSize;
+  const dimension = typeof requestedSize === 'string' && /^\d+(\.\d+)?$/.test(requestedSize)
+    ? Number(requestedSize)
+    : requestedSize;
+  const iconStyle = dimension ? { width: dimension, height: dimension, ...style } : style;
 
   return (
     <svg

@@ -28,7 +28,9 @@ import { getUserId } from './utils';
 
 // ─── Stores ───
 import useBookmarkStore from './store/bookmarkStore';
+import useAIStore from './store/aiStore';
 import useCommentStore from './store/commentStore';
+import useEventStore from './store/eventStore';
 import usePostStore from './store/postStore';
 import useUiStore, { ADMIN_ROUTE_PAGES } from './store/uiStore';
 
@@ -122,14 +124,19 @@ function App() {
   const aiOpen = useUiStore(selectAiOpen);
   const closeAi = useUiStore(selectCloseAi);
   const activePage = useUiStore(selectActivePage);
+  // History can move between two detail URLs without changing activePage.
+  useUiStore((s) => s.routeVersion);
   const uiDraftId = useUiStore(selectUiDraftId);
   const leaveConfirm = useUiStore(selectLeaveConfirm);
+  const navigationSaving = useUiStore((s) => s.navigationSaving);
+  const navigationError = useUiStore((s) => s.navigationError);
   const closeLeaveConfirm = useUiStore(selectCloseLeaveConfirm);
   const confirmPendingNavigation = useUiStore(selectConfirmPendingNavigation);
   const discardPendingNavigation = useUiStore(selectDiscardPendingNavigation);
   const navigate = useUiStore(selectNavigate);
   const isAdmin = useAuthStore((s) => s.user?.role === 'admin');
   const currentUserId = useAuthStore((s) => s.user?._id);
+  const previousUserIdRef = React.useRef(currentUserId);
   const isAdminRoute = activePage === 'admin' || ADMIN_ROUTE_PAGES.includes(activePage);
 
   // ── 已登录用户不可访问 auth 页面（如通过后退回到 /login） ──
@@ -157,15 +164,35 @@ function App() {
   const removeComment = useCommentStore(selectRemoveComment);
   const upsertReply = useCommentStore(selectUpsertReply);
   const removeReply = useCommentStore(selectRemoveReply);
-  const detailRoutePostId = React.useMemo(() => {
-    if (activePage !== 'detail' || typeof window === 'undefined') return null;
-    return window.location.pathname.match(/^\/detail\/(.+)/)?.[1] || null;
-  }, [activePage]);
+  const detailRoutePostId = activePage === 'detail' && typeof window !== 'undefined'
+    ? window.location.pathname.match(/^\/detail\/(.+)/)?.[1] || null
+    : null;
   const detailPost = selectedPost ? getPostLikeView(selectedPost) : null;
   const isResolvedDetailPost = Boolean(
     detailPost && (!detailRoutePostId || detailPost.id === detailRoutePostId),
   );
   const user = useAuthStore((s) => s.user);
+  React.useLayoutEffect(() => {
+    if (previousUserIdRef.current !== currentUserId) {
+      usePostStore.getState().resetForAccountChange();
+      useCommentStore.getState().resetForAccountChange();
+      useBookmarkStore.getState().resetForAccountChange();
+      useAIStore.getState().resetForAccountChange();
+      useEventStore.getState().resetForAccountChange();
+      useNotificationStore.getState().reset();
+      useUiStore.setState({ aiOpen: false });
+      previousUserIdRef.current = currentUserId;
+      if (currentUserId && useAuthStore.getState().user?.role !== 'admin') {
+        useNotificationStore.getState().refresh();
+        const ui = useUiStore.getState();
+        if (ui.activePage === 'home') {
+          usePostStore.getState().fetchPosts(1, ui.query, { tag: ui.feedTag });
+        }
+      }
+    }
+    useUiStore.setState({ responseDrafts: {}, responseActivities: {}, expandedPostIds: [], composeSeed: null });
+    useUiStore.getState().resetQuickDraft();
+  }, [currentUserId]);
 
   // ── Hooks ──
   const { toggleLike, toggleBookmark, selectFolder: handleSelectFolder } = useLikeBookmark();
@@ -200,12 +227,7 @@ function App() {
     };
 
     if (!user) {
-      startPolling();
-      return () => {
-        if (intervalId) {
-          window.clearInterval(intervalId);
-        }
-      };
+      return undefined;
     }
 
     const connectStream = () => {
@@ -275,10 +297,11 @@ function App() {
 
       const currentPostId = selectedPost?.id;
       const parseCurrentPostEvent = (event) => {
-        if (activePage !== 'detail' || !currentPostId) return null;
         try {
           const data = JSON.parse(event.data || '{}');
-          return data.postId === currentPostId ? data : null;
+          const commentState = useCommentStore.getState();
+          const relevant = commentState.loadedPostIds[data.postId] || commentState.loadStates[data.postId]?.loading;
+          return ((activePage === 'detail' && data.postId === currentPostId) || relevant) ? data : null;
         } catch {
           return null;
         }
@@ -287,28 +310,28 @@ function App() {
       eventSource.addEventListener('comment-created', (event) => {
         const data = parseCurrentPostEvent(event);
         if (data?.comment) {
-          upsertComment(currentPostId, data.comment);
+          upsertComment(data.postId, data.comment);
         }
       });
 
       eventSource.addEventListener('comment-deleted', (event) => {
         const data = parseCurrentPostEvent(event);
         if (data?.commentId) {
-          removeComment(currentPostId, data.commentId);
+          removeComment(data.postId, data.commentId);
         }
       });
 
       eventSource.addEventListener('reply-created', (event) => {
         const data = parseCurrentPostEvent(event);
         if (data?.commentId && data?.reply) {
-          upsertReply(currentPostId, data.commentId, data.reply);
+          upsertReply(data.postId, data.commentId, data.reply);
         }
       });
 
       eventSource.addEventListener('reply-deleted', (event) => {
         const data = parseCurrentPostEvent(event);
         if (data?.commentId && data?.replyId) {
-          removeReply(currentPostId, data.commentId, data.replyId);
+          removeReply(data.postId, data.commentId, data.replyId);
         }
       });
     };
@@ -422,7 +445,7 @@ function App() {
     }
 
     loadBookmarks().catch(() => {});
-  }, [initialized, isAuthenticated, isAdmin, loadBookmarks, resetBookmarks]);
+  }, [initialized, isAuthenticated, isAdmin, currentUserId, loadBookmarks, resetBookmarks]);
 
   // ── Landing page / Auth gate ──
   if (!initialized) return null;
@@ -506,6 +529,7 @@ function App() {
       await addComment(selectedPost.id, content, image);
     } catch (err) {
       showToast(err.message || '评论失败');
+      throw err;
     }
   };
 
@@ -515,6 +539,7 @@ function App() {
       await useCommentStore.getState().addReply(commentId, content, image, false, replyToId);
     } catch (err) {
       showToast(err.message || '回复失败');
+      throw err;
     }
   };
 
@@ -553,7 +578,8 @@ function App() {
 
   // ── Render ──
   return (
-    <div className="flex min-h-screen">
+    <div className="app-shell flex min-h-screen">
+      <a className="skip-link" href="#main-content">跳到主要内容</a>
       <Sidebar activePage={activePage} onNavigate={navigate} />
       <div className="min-w-0 flex-1">
         <TopBar
@@ -562,11 +588,12 @@ function App() {
           onNavigate={navigate}
           onAIOpen={handleToggleAi}
         />
-        <main className="min-w-0 overflow-x-hidden p-6 pb-12 max-md:px-4 max-md:pt-5 max-md:pb-24">
+        <main id="main-content" className="app-main min-w-0 p-6 pb-12 max-md:px-4 max-md:pt-5 max-md:pb-24">
           {activePage === 'home' && <HomePage />}
           {activePage === 'detail' && (
             isResolvedDetailPost ? (
               <DetailPage
+                key={detailPost.id}
                 post={detailPost}
                 comments={comments}
                 liked={detailPost?.isLiked}
@@ -670,16 +697,18 @@ function App() {
         </main>
         <MobileNav activePage={activePage} onNavigate={navigate} />
       </div>
-      <AIPanel open={aiOpen} onClose={closeAi} />
+      <AIPanel key={currentUserId} open={aiOpen} onClose={closeAi} />
       {toast && <Toast message={toast} onDone={clearToast} />}
       <ConfirmLeaveDialog
         open={leaveConfirm.open}
         title={leaveConfirm.title}
         description={leaveConfirm.description}
-        confirmText={leaveConfirm.confirmText}
+        confirmText={navigationSaving ? '保存中…' : leaveConfirm.confirmText}
         discardText={leaveConfirm.discardText}
         cancelText={leaveConfirm.cancelText}
         mode={leaveConfirm.mode}
+        pending={navigationSaving}
+        error={navigationError}
         onConfirm={confirmPendingNavigation}
         onDiscard={discardPendingNavigation}
         onCancel={closeLeaveConfirm}

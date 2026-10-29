@@ -1,3 +1,4 @@
+import Select from '../common/Select';
 import React from 'react';
 import useAuthStore from '../../store/authStore';
 import Icon from '../common/Icon';
@@ -21,11 +22,45 @@ export default function RegisterPage({ onNavigate }) {
   const [password, setPassword] = React.useState('');
   const [confirmPassword, setConfirmPassword] = React.useState('');
   const [verifyCode, setVerifyCode] = React.useState('');
-  const [codeSent, setCodeSent] = React.useState(false);
+  const [sentEmail, setSentEmail] = React.useState('');
   const [countdown, setCountdown] = React.useState(0);
   const [errors, setErrors] = React.useState({});
   const [generalError, setGeneralError] = React.useState('');
   const [codeLoading, setCodeLoading] = React.useState(false);
+  const [submitLoading, setSubmitLoading] = React.useState(false);
+  const codeRequestLockRef = React.useRef(false);
+  const submitLockRef = React.useRef(false);
+  const countdownTimerRef = React.useRef(null);
+
+  const email = prefix + domain;
+  const emailRef = React.useRef(email);
+  emailRef.current = email;
+
+  const clearCountdown = () => {
+    if (countdownTimerRef.current) {
+      clearInterval(countdownTimerRef.current);
+      countdownTimerRef.current = null;
+    }
+  };
+
+  React.useEffect(() => () => {
+    if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
+  }, []);
+
+  const handleAddressChange = (nextPrefix, nextDomain) => {
+    if (codeRequestLockRef.current || submitLockRef.current) return;
+    const nextEmail = nextPrefix + nextDomain;
+    emailRef.current = nextEmail;
+    if (nextEmail !== email) {
+      clearCountdown();
+      setSentEmail('');
+      setVerifyCode('');
+      setCountdown(0);
+      setErrors((prev) => ({ ...prev, email: '', verifyCode: '' }));
+    }
+    setPrefix(nextPrefix);
+    setDomain(nextDomain);
+  };
 
   const validate = () => {
     const e = {};
@@ -48,37 +83,55 @@ export default function RegisterPage({ onNavigate }) {
   };
 
   const handleSendCode = async () => {
+    if (codeRequestLockRef.current || submitLockRef.current || countdown > 0) return;
     if (!prefix || !/^[a-zA-Z0-9._%+-]+$/.test(prefix)) {
       setErrors((prev) => ({ ...prev, email: '请输入有效的邮箱前缀' }));
       return;
     }
     setGeneralError('');
+    codeRequestLockRef.current = true;
     setCodeLoading(true);
     try {
-      await sendVerifyCode(prefix + domain, 'register');
-      setCodeSent(true);
+      const requestedEmail = email;
+      await sendVerifyCode(requestedEmail, 'register');
+      if (emailRef.current !== requestedEmail) return;
+      setSentEmail(requestedEmail);
+      clearCountdown();
       setCountdown(60);
-      const timer = setInterval(() => {
-        setCountdown((c) => {
-          if (c <= 1) { clearInterval(timer); return 0; }
-          return c - 1;
-        });
+      let remaining = 60;
+      countdownTimerRef.current = setInterval(() => {
+        remaining -= 1;
+        if (remaining <= 0) {
+          clearCountdown();
+          setCountdown(0);
+        } else {
+          setCountdown(remaining);
+        }
       }, 1000);
     } catch (err) {
       setErrors((prev) => ({ ...prev, email: err.message }));
     } finally {
+      codeRequestLockRef.current = false;
       setCodeLoading(false);
     }
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (submitLockRef.current || codeRequestLockRef.current) return;
     setGeneralError('');
     if (!validate()) return;
+    if (!sentEmail || sentEmail !== email) {
+      setErrors((prev) => ({ ...prev, verifyCode: '请先向当前邮箱获取验证码' }));
+      return;
+    }
+
+    submitLockRef.current = true;
+    setSubmitLoading(true);
     try {
       // Verify code then register
-      await checkVerifyCode(prefix + domain, verifyCode, 'register');
-      await register(prefix + domain, password);
+      await checkVerifyCode(sentEmail, verifyCode, 'register');
+      await register(sentEmail, password);
       onNavigate('home');
     } catch (err) {
       const msg = err.message || '注册失败，请重试';
@@ -91,16 +144,19 @@ export default function RegisterPage({ onNavigate }) {
       } else {
         setGeneralError(msg);
       }
+    } finally {
+      submitLockRef.current = false;
+      setSubmitLoading(false);
     }
   };
 
   return (
     <div className="auth-page">
       {/* Brand */}
-      <div className="auth-brand">
-        <span className="auth-brand-mark">Ｎ</span>
-        <span className="auth-brand-text">NJU 树洞</span>
-      </div>
+      <button type="button" className="auth-brand auth-brand-button" onClick={() => onNavigate('home')} aria-label="返回南大树洞首页">
+        <span className="auth-brand-mark"><Icon name="park" /></span>
+        <span className="auth-brand-text">南大树洞</span>
+      </button>
 
       <div className="auth-card">
         <h1 className="auth-title">创建账号</h1>
@@ -117,15 +173,11 @@ export default function RegisterPage({ onNavigate }) {
                 className="auth-email-input"
                 placeholder="学号"
                 value={prefix}
-                onChange={(e) => { setPrefix(e.target.value); setErrors((prev) => ({ ...prev, email: '' })); }}
+                onChange={(e) => handleAddressChange(e.target.value, domain)}
                 autoComplete="off"
-                disabled={loading}
+                disabled={loading || codeLoading || submitLoading}
               />
-              <select className="auth-email-select" value={domain} onChange={(e) => setDomain(e.target.value)} disabled={loading}>
-                {DOMAINS.map((d) => (
-                  <option key={d.value} value={d.value}>{d.label}</option>
-                ))}
-              </select>
+              <Select aria-label="学校邮箱后缀" className="auth-email-select" value={domain} onChange={(nextDomain) => handleAddressChange(prefix, nextDomain)} disabled={loading || codeLoading || submitLoading} options={DOMAINS.map(d => ({ value: d.value, label: d.label }))} />
             </div>
             {errors.email && <p className="auth-error-text">{errors.email}</p>}
           </div>
@@ -142,14 +194,14 @@ export default function RegisterPage({ onNavigate }) {
                 maxLength={6}
                 value={verifyCode}
                 onChange={(e) => { setVerifyCode(e.target.value.replace(/\D/g, '').slice(0, 6)); setErrors((prev) => ({ ...prev, verifyCode: '' })); }}
-                disabled={loading}
+                disabled={loading || codeLoading || submitLoading}
                 autoComplete="off"
               />
               <button
                 type="button"
                 className={`auth-code-btn ${countdown > 0 ? 'auth-code-btn-disabled' : ''}`}
                 onClick={handleSendCode}
-                disabled={codeLoading || countdown > 0}
+                disabled={loading || submitLoading || codeLoading || countdown > 0}
               >
                 {codeLoading ? (
                 <span className="flex items-center gap-1.5">
@@ -158,13 +210,14 @@ export default function RegisterPage({ onNavigate }) {
                 </span>
               ) : countdown > 0 ? (
                   `${countdown}s`
-                ) : codeSent ? (
+                ) : sentEmail ? (
                   '重新发送'
                 ) : (
                   '发送验证码'
                 )}
               </button>
             </div>
+            {sentEmail && <p className="auth-subtitle" role="status">验证码已发送至 {sentEmail}</p>}
             {errors.verifyCode && <p className="auth-error-text">{errors.verifyCode}</p>}
           </div>
 
@@ -179,7 +232,7 @@ export default function RegisterPage({ onNavigate }) {
               value={password}
               onChange={(e) => { setPassword(e.target.value); setErrors((prev) => ({ ...prev, password: '' })); }}
               autoComplete="new-password"
-              disabled={loading}
+              disabled={loading || submitLoading || codeLoading}
             />
             {errors.password && <p className="auth-error-text">{errors.password}</p>}
           </div>
@@ -195,14 +248,14 @@ export default function RegisterPage({ onNavigate }) {
               value={confirmPassword}
               onChange={(e) => { setConfirmPassword(e.target.value); setErrors((prev) => ({ ...prev, confirmPassword: '' })); }}
               autoComplete="new-password"
-              disabled={loading}
+              disabled={loading || submitLoading || codeLoading}
             />
             {errors.confirmPassword && <p className="auth-error-text">{errors.confirmPassword}</p>}
           </div>
 
           {/* General error */}
           {generalError && (
-            <div className="auth-general-error">
+            <div className="auth-general-error" role="alert">
               <Icon name="error_outline" />
               <span>{generalError}</span>
             </div>
@@ -212,9 +265,9 @@ export default function RegisterPage({ onNavigate }) {
           <button
             type="submit"
             className="auth-submit"
-            disabled={loading}
+            disabled={loading || submitLoading || codeLoading}
           >
-            {loading ? (
+            {loading || submitLoading ? (
               <span className="auth-spinner">
                 <Icon name="loop" />
                 创建中…

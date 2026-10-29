@@ -38,7 +38,7 @@ function TraceModal({ onClose, onConfirm }) {
 
   return (
     <div className="modal-overlay fixed inset-0 z-[150] grid place-items-center bg-black/40 backdrop-blur-sm" onClick={onClose}>
-      <div className="modal-content w-[min(500px,90vw)] rounded-2xl bg-white p-6 shadow-lg" onClick={(e) => e.stopPropagation()}>
+      <div className="modal-content w-[min(500px,90vw)] rounded-2xl bg-surface p-6 shadow-lg" onClick={(e) => e.stopPropagation()}>
         <h2 className="text-xl font-bold mb-4">追溯发帖人身份</h2>
         <p className="text-gray-600 text-sm mb-4">请输入追溯原因（必填，将记录审计日志）</p>
         <textarea
@@ -84,7 +84,7 @@ function BanModal({ postId, onConfirm, onClose }) {
 
   return (
     <div className="modal-overlay fixed inset-0 z-[150] grid place-items-center bg-black/40 backdrop-blur-sm" onClick={onClose}>
-      <div className="modal-content w-[min(500px,90vw)] rounded-2xl bg-white p-6 shadow-lg" onClick={(e) => e.stopPropagation()}>
+      <div className="modal-content w-[min(500px,90vw)] rounded-2xl bg-surface p-6 shadow-lg" onClick={(e) => e.stopPropagation()}>
         <h2 className="text-xl font-bold mb-4">封禁用户</h2>
 
         <div className="mb-4">
@@ -155,7 +155,7 @@ function UnbanModal({ ban, onConfirm, onClose }) {
 
   return (
     <div className="modal-overlay fixed inset-0 z-[150] grid place-items-center bg-black/40 backdrop-blur-sm" onClick={onClose}>
-      <div className="modal-content w-[min(500px,90vw)] rounded-2xl bg-white p-6 shadow-lg" onClick={(e) => e.stopPropagation()}>
+      <div className="modal-content w-[min(500px,90vw)] rounded-2xl bg-surface p-6 shadow-lg" onClick={(e) => e.stopPropagation()}>
         <h2 className="text-xl font-bold mb-4">提前解禁</h2>
         <p className="text-gray-600 text-sm mb-4">用户：{ban.userId?.email || '未知'}</p>
         <textarea
@@ -186,7 +186,7 @@ function PostDetailModal({ post, onClose }) {
   if (post.targetType === 'comment' || post.targetType === 'reply') {
     return (
       <div className="modal-overlay fixed inset-0 z-[150] grid place-items-center bg-black/30 backdrop-blur-sm" onClick={onClose}>
-        <div className="modal-content w-[min(640px,90vw)] max-h-[85vh] overflow-y-auto rounded-2xl bg-white p-6 shadow-lg" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-content w-[min(640px,90vw)] max-h-[85vh] overflow-y-auto rounded-2xl bg-surface p-6 shadow-lg" onClick={(e) => e.stopPropagation()}>
           <div className="flex items-start justify-between gap-4 mb-4">
             <div className="flex-1">
               <span className="inline-block px-3 py-1 text-xs font-semibold rounded-full bg-blue-100 text-blue-700 mb-2">
@@ -217,7 +217,7 @@ function PostDetailModal({ post, onClose }) {
   // 帖子详情
   return (
     <div className="modal-overlay fixed inset-0 z-[150] grid place-items-center bg-black/30 backdrop-blur-sm" onClick={onClose}>
-      <div className="modal-content w-[min(640px,90vw)] max-h-[85vh] overflow-y-auto rounded-2xl bg-white p-6 shadow-lg" onClick={(e) => e.stopPropagation()}>
+      <div className="modal-content w-[min(640px,90vw)] max-h-[85vh] overflow-y-auto rounded-2xl bg-surface p-6 shadow-lg" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-start justify-between gap-4 mb-4">
           <div className="flex-1">
             {post.mood && <span className="inline-block px-3 py-1 text-xs font-semibold rounded-full bg-purple-100 text-purple-700 mb-2">{post.mood}</span>}
@@ -404,7 +404,7 @@ function AdminDashboard() {
   };
 
   return (
-    <div className="flex min-h-screen">
+    <div className="admin-shell flex min-h-screen">
       <AdminSidebar activeTab={activeTab} onTabChange={handleTabChange} />
 
       <div className="min-w-0 flex-1 flex flex-col">

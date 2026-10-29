@@ -132,15 +132,14 @@ git checkout -b feat/<module>-<summary>
 沿用现有约定，建议格式：
 
 ```text
-[AI-assisted] feat(ai): add web search tool scaffold
-[Human-written] fix(post): handle empty image drafts
-[AI-assisted] docs: add collaboration workflow
+feat(ai): add web search tool scaffold
+fix(post): handle empty image drafts
+docs: add collaboration workflow
 ```
 
 要求：
 
-- 必须标注是否使用 AI 辅助
-- 必须写清模块和改动目的
+- 写清模块和改动目的
 - 不要使用 `update`、`fix bug`、`改一下` 这类无信息量描述
 
 ## Pull Request 规范

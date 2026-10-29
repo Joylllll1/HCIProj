@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import AISession from '../models/AISession.js';
 import AIMessage from '../models/AIMessage.js';
 import AppError from '../utils/AppError.js';
@@ -221,22 +222,54 @@ function toLLMMessage(message) {
   return llmMessage;
 }
 
-async function saveAndStreamStaticAssistantReply({ session, effectivePersona, content, emitEvent }) {
-  if (emitEvent) {
-    emitEvent(sseToken(content));
+function selectCompleteTurnMessages(messages = []) {
+  const legacyMessages = [];
+  const turns = new Map();
+
+  for (const message of messages) {
+    if (!message.turnId) {
+      if (!['pending', 'interrupted'].includes(message.status)) {
+        legacyMessages.push(message);
+      }
+      continue;
+    }
+
+    if (!turns.has(message.turnId)) turns.set(message.turnId, []);
+    turns.get(message.turnId).push(message);
   }
 
+  const completeTurnMessages = [...turns.values()]
+    .filter((turn) => (
+      turn.some((message) => message.role === 'user')
+      && turn.some((message) => message.role === 'assistant')
+      && turn.every((message) => message.status === 'complete')
+    ))
+    .flat();
+
+  return [...legacyMessages, ...completeTurnMessages]
+    .sort((left, right) => new Date(left.createdAt) - new Date(right.createdAt));
+}
+
+async function saveAndStreamStaticAssistantReply({ session, userMessage, turnId, effectivePersona, content, emitEvent }) {
   const aiMessage = await AIMessage.create({
     session: session._id,
+    turnId,
+    status: 'pending',
     role: 'assistant',
     content,
     reasoningContent: '',
   });
 
+  userMessage.status = 'complete';
+  await userMessage.save();
+  aiMessage.status = 'complete';
+  await aiMessage.save();
+
   session.updatedAt = new Date();
   await session.save();
 
   if (emitEvent) {
+    emitEvent(sseToken(content));
     emitEvent(sseDone());
   }
 
@@ -247,6 +280,8 @@ async function saveAndStreamStaticAssistantReply({ session, effectivePersona, co
       role: aiMessage.role,
       content: aiMessage.content,
       createdAt: aiMessage.createdAt,
+      status: aiMessage.status,
+      turnId: aiMessage.turnId,
     },
   };
 }
@@ -264,27 +299,32 @@ function throwAbortErrorIfNeeded(signal) {
   }
 }
 
-async function cleanupAbortedUserTurn({ session, userMessage, createdNewSession }) {
-  console.log('[ai] cleaning aborted user turn:', JSON.stringify({
+async function persistInterruptedTurn({ session, userMessage, turnId, content, assistantMessage }) {
+  console.log('[ai] preserving interrupted user turn:', JSON.stringify({
     sessionId: session._id.toString(),
     userMessageId: userMessage._id.toString(),
-    createdNewSession,
+    contentLength: content.length,
   }));
-  await AIMessage.deleteOne({
-    _id: userMessage._id,
-    session: session._id,
-    role: 'user',
-  });
 
-  if (!createdNewSession) {
-    return;
+  if (assistantMessage) {
+    assistantMessage.content = content;
+    assistantMessage.status = 'interrupted';
+    await assistantMessage.save();
+  } else if (content) {
+    await AIMessage.create({
+      session: session._id,
+      turnId,
+      status: 'interrupted',
+      role: 'assistant',
+      content,
+      reasoningContent: '',
+    });
   }
 
-  const remainingMessages = await AIMessage.countDocuments({ session: session._id });
-  if (remainingMessages === 0) {
-    console.log('[ai] deleting empty session after abort:', session._id.toString());
-    await AISession.deleteOne({ _id: session._id });
-  }
+  userMessage.status = 'interrupted';
+  await userMessage.save();
+  session.updatedAt = new Date();
+  await session.save();
 }
 
 // 发送消息并获取 AI 回复
@@ -315,140 +355,171 @@ export const sendMessage = async (userId, sessionId, content, options = {}) => {
     }
   }
 
-  if (options.emitEvent) {
-    options.emitEvent(sseStart(session._id.toString()));
-  }
-
   // 保存用户消息
+  const turnId = options.turnId || new mongoose.Types.ObjectId().toString();
   const userMessage = await AIMessage.create({
     session: session._id,
+    turnId,
+    status: 'pending',
     role: 'user',
     content,
     contextSnapshot: normalizeChatContext(options.context),
   });
+  if (options.emitEvent) {
+    options.emitEvent(sseStart(session._id.toString()));
+  }
   console.log('[ai] user message saved:', JSON.stringify({
     sessionId: session._id.toString(),
     userMessageId: userMessage._id.toString(),
     createdNewSession,
   }));
 
-  const effectivePersona = await resolveEffectivePersona(userId, session);
-  const contextualReply = resolveContextualReply(content, options.context);
-  const currentPostContextMessage = buildCurrentPostContextMessage(options.context);
-  const currentDate = getCurrentDateString();
+  let streamedContent = '';
+  let assistantMessage = null;
+  let effectivePersona;
+  const emitTurnEvent = (event) => {
+    try {
+      const payload = JSON.parse(event.slice(6).trim());
+      if (payload.type === 'token') streamedContent += payload.content || '';
+    } catch {
+      // Keep streaming other valid events if a provider emits an unknown frame.
+    }
+    options.emitEvent?.(event);
+  };
 
-  if (contextualReply) {
-    const staticResult = await saveAndStreamStaticAssistantReply({
-      session,
-      effectivePersona,
-      content: contextualReply,
-      emitEvent: options.emitEvent,
+  try {
+    effectivePersona = await resolveEffectivePersona(userId, session);
+    const contextualReply = resolveContextualReply(content, options.context);
+    const currentPostContextMessage = buildCurrentPostContextMessage(options.context);
+    const currentDate = getCurrentDateString();
+
+    if (contextualReply) {
+      const staticResult = await saveAndStreamStaticAssistantReply({
+        session,
+        userMessage,
+        turnId,
+        effectivePersona,
+        content: contextualReply,
+        emitEvent: options.emitEvent,
+      });
+
+      return {
+        session: staticResult.session,
+        userMessage: {
+          _id: userMessage._id,
+          role: userMessage.role,
+          content: userMessage.content,
+          createdAt: userMessage.createdAt,
+          status: userMessage.status,
+          turnId: userMessage.turnId,
+        },
+        assistantMessage: staticResult.assistantMessage,
+      };
+    }
+
+    const historyMessages = await AIMessage.find({ session: session._id })
+      .sort({ createdAt: -1 })
+      .limit(MAX_CONTEXT_MESSAGES)
+      .lean();
+    historyMessages.reverse();
+
+    const completeHistory = selectCompleteTurnMessages(historyMessages)
+      .filter((message) => message.turnId !== turnId)
+      .slice(-(MAX_CONTEXT_MESSAGES - 1));
+    const llmMessages = [
+      { role: 'system', content: buildSystemPrompt(effectivePersona, currentDate) },
+      ...(currentPostContextMessage ? [{ role: 'system', content: currentPostContextMessage }] : []),
+      ...completeHistory.map(toLLMMessage),
+      { role: 'user', content },
+    ];
+    const prefetchedInput = await maybePrefetchWebSearch({
+      messages: llmMessages,
+      content,
+      signal: options.signal,
+      emitEvent: emitTurnEvent,
     });
 
+    const result = await runToolLoop({
+      messages: prefetchedInput.messages,
+      signal: options.signal,
+      writeEvent: emitTurnEvent,
+      initialToolCallCount: prefetchedInput.initialToolCallCount,
+    });
+    throwAbortErrorIfNeeded(options.signal);
+    streamedContent = result.content || streamedContent;
+
+    assistantMessage = await AIMessage.create({
+      session: session._id,
+      turnId,
+      status: 'pending',
+      role: 'assistant',
+      content: result.content,
+      reasoningContent: result.reasoningContent || '',
+    });
+    userMessage.status = 'complete';
+    await userMessage.save();
+    assistantMessage.status = 'complete';
+    await assistantMessage.save();
+
+    console.log('[ai] assistant message saved:', JSON.stringify({
+      sessionId: session._id.toString(),
+      assistantMessageId: assistantMessage._id.toString(),
+      contentLength: result.content.length,
+    }));
+
+    session.updatedAt = new Date();
+    await session.save();
+    options.emitEvent?.(sseDone());
+
     return {
-      session: staticResult.session,
+      session: serializeSession(session, effectivePersona),
       userMessage: {
         _id: userMessage._id,
         role: userMessage.role,
         content: userMessage.content,
         createdAt: userMessage.createdAt,
+        status: userMessage.status,
+        turnId: userMessage.turnId,
       },
-      assistantMessage: staticResult.assistantMessage,
+      assistantMessage: {
+        _id: assistantMessage._id,
+        role: assistantMessage.role,
+        content: assistantMessage.content,
+        createdAt: assistantMessage.createdAt,
+        status: assistantMessage.status,
+        turnId: assistantMessage.turnId,
+      },
     };
-  }
-
-  // 获取历史消息作为上下文
-  const historyMessages = await AIMessage.find({ session: session._id })
-    .sort({ createdAt: -1 })
-    .limit(MAX_CONTEXT_MESSAGES)
-    .lean();
-
-  // 按时间顺序排列
-  historyMessages.reverse();
-
-  const llmMessages = [
-    { role: 'system', content: buildSystemPrompt(effectivePersona, currentDate) },
-    ...(currentPostContextMessage ? [{ role: 'system', content: currentPostContextMessage }] : []),
-    ...historyMessages.map(toLLMMessage),
-  ];
-  const prefetchedInput = await maybePrefetchWebSearch({
-    messages: llmMessages,
-    content,
-    signal: options.signal,
-    emitEvent: options.emitEvent,
-  });
-
-  // 调用 LLM with tool loop
-  let aiContent;
-  let aiReasoningContent = '';
-  try {
-    const result = await runToolLoop({
-      messages: prefetchedInput.messages,
-      signal: options.signal,
-      writeEvent: options.emitEvent || (() => {}),
-      initialToolCallCount: prefetchedInput.initialToolCallCount,
-    });
-    throwAbortErrorIfNeeded(options.signal);
-    aiContent = result.content;
-    aiReasoningContent = result.reasoningContent || '';
   } catch (error) {
-    if (error.name === 'AbortError') {
-      console.log('[ai] llm generation aborted before assistant save:', JSON.stringify({
-        sessionId: session._id.toString(),
-        userMessageId: userMessage._id.toString(),
-      }));
-      await cleanupAbortedUserTurn({ session, userMessage, createdNewSession });
+    if (userMessage.status !== 'complete' || assistantMessage?.status !== 'complete') {
+      await persistInterruptedTurn({
+        session,
+        userMessage,
+        turnId,
+        content: streamedContent,
+        assistantMessage,
+      });
+    }
+
+    if (error.name === 'AbortError' || options.signal?.aborted) {
       throw new AppError('AI 生成已中断', 499, 'LLM_ABORTED');
     }
     if (error.isOperational) {
       throw new AppError(error.message, error.statusCode, error.errorCode, {
         session: serializeSession(session, effectivePersona),
         savedMessage: {
-          _id: userMessage._id, role: userMessage.role,
-          content: userMessage.content, createdAt: userMessage.createdAt,
+          _id: userMessage._id,
+          role: 'user',
+          content: userMessage.content,
+          createdAt: userMessage.createdAt,
+          status: userMessage.status,
+          turnId: userMessage.turnId,
         },
       });
     }
     throw error;
   }
 
-  // 保存 AI 回复
-  throwAbortErrorIfNeeded(options.signal);
-  const aiMessage = await AIMessage.create({
-    session: session._id,
-    role: 'assistant',
-    content: aiContent,
-    reasoningContent: aiReasoningContent,
-  });
-  console.log('[ai] assistant message saved:', JSON.stringify({
-    sessionId: session._id.toString(),
-    assistantMessageId: aiMessage._id.toString(),
-    contentLength: aiContent.length,
-  }));
-
-  // 更新会话更新时间
-  session.updatedAt = new Date();
-  await session.save();
-
-  if (options.emitEvent) {
-    options.emitEvent(sseDone());
-  }
-
-  return {
-    session: serializeSession(session, effectivePersona),
-    userMessage: {
-      _id: userMessage._id,
-      role: userMessage.role,
-      content: userMessage.content,
-      createdAt: userMessage.createdAt,
-    },
-    assistantMessage: {
-      _id: aiMessage._id,
-      role: aiMessage.role,
-      content: aiMessage.content,
-      createdAt: aiMessage.createdAt,
-    },
-  };
 };
 
 // 重新生成最后一条 AI 回复
@@ -466,6 +537,7 @@ export const regenerateMessage = async (userId, sessionId, options = {}) => {
   const lastMessage = await AIMessage.findOne({
     session: session._id,
     role: 'assistant',
+    $or: [{ status: 'complete' }, { status: { $exists: false } }],
   }).sort({ createdAt: -1 });
 
   if (!lastMessage) {
@@ -473,32 +545,32 @@ export const regenerateMessage = async (userId, sessionId, options = {}) => {
   }
 
   // 获取历史消息（不包括最后一条 AI 消息）
-  const historyMessages = await AIMessage.find({
-    session: session._id,
-    _id: { $ne: lastMessage._id },
-  })
+  const historyMessages = await AIMessage.find({ session: session._id })
     .sort({ createdAt: -1 })
     .limit(MAX_CONTEXT_MESSAGES)
     .lean();
 
   historyMessages.reverse();
+  const completeHistory = selectCompleteTurnMessages(historyMessages)
+    .filter((message) => message._id.toString() !== lastMessage._id.toString())
+    .slice(-MAX_CONTEXT_MESSAGES);
 
   // 构建 LLM 消息格式
   const effectivePersona = await resolveEffectivePersona(userId, session);
-  const latestUserMessage = [...historyMessages].reverse().find((message) => message.role === 'user');
+  const latestUserMessage = [...completeHistory].reverse().find((message) => message.role === 'user');
   const originalContext = resolveMessageContext(latestUserMessage);
   const contextualReply = resolveContextualReply(latestUserMessage?.content, originalContext);
   const currentPostContextMessage = buildCurrentPostContextMessage(originalContext);
   const currentDate = getCurrentDateString();
 
   if (contextualReply) {
-    emitStaticAssistantReply(contextualReply, options.emitEvent);
     lastMessage.content = contextualReply;
     lastMessage.reasoningContent = '';
     lastMessage.createdAt = new Date();
     await lastMessage.save();
     session.updatedAt = new Date();
     await session.save();
+    emitStaticAssistantReply(contextualReply, options.emitEvent);
 
     return {
       session: serializeSession(session, effectivePersona),
@@ -514,7 +586,7 @@ export const regenerateMessage = async (userId, sessionId, options = {}) => {
   const llmMessages = [
     { role: 'system', content: buildSystemPrompt(effectivePersona, currentDate) },
     ...(currentPostContextMessage ? [{ role: 'system', content: currentPostContextMessage }] : []),
-    ...historyMessages.map(toLLMMessage),
+    ...completeHistory.map(toLLMMessage),
   ];
   const prefetchedInput = await maybePrefetchWebSearch({
     messages: llmMessages,
@@ -601,6 +673,8 @@ export const getSession = async (userId, sessionId) => {
       role: m.role,
       content: m.content,
       createdAt: m.createdAt,
+      status: m.status || 'complete',
+      turnId: m.turnId,
     })),
   };
 };

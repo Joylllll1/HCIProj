@@ -21,6 +21,16 @@ const aiMessageSchema = new mongoose.Schema(
       type: String,
       default: '',
     },
+    turnId: {
+      type: String,
+      index: true,
+    },
+    status: {
+      type: String,
+      enum: ['pending', 'complete', 'interrupted'],
+      default: 'complete',
+      index: true,
+    },
     contextSnapshot: {
       type: mongoose.Schema.Types.Mixed,
       default: null,

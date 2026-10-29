@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "lint": "eslint . --ext .js,.jsx,.ts,.tsx",
     "lint:fix": "eslint . --ext .js,.jsx,.ts,.tsx --fix",
-    "test": "vitest run"
+    "test": "vitest run",
+    "dev:demo": "vite --host 127.0.0.1 --open /?preview=1"
   },
   "dependencies": {
     "gsap": "^3.15.0",
