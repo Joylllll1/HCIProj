@@ -173,3 +173,11 @@
 2. 通知采用 SSE 触发刷新与轮询兜底
 3. 图片使用后端本地文件目录，多实例共享存储与无引用文件清理仍待补充
 4. 若未来需要恢复浏览器侧跨域直连后端，需重新补齐 `credentials: 'include'`、精确 `cors(origin, credentials)`、cookie `sameSite/secure` 策略，以及对应部署文档
+
+### 收藏批量管理（当前实现）
+
+收藏事实存于 `Post.savedBy`，`User.bookmarkFolderMap` 仅保存自定义分类；`all` 聚合全部收藏。独立页和个人空间复用 `BookmarksPage` 与 `useBookmarkSelection`，最多选择当前显示的 100 篇。人工批量接口独立于 AI 工具注册表。
+
+`bookmarkService` 所有写入口（文件夹、保存、取消、旧 toggle、历史迁移、批量）共用单 Node 进程的按用户串行队列；User 更新同时匹配 `bookmarkVersion` 并递增。读取仅规范化响应，不隐式保存。旧用户先通过 `npm run migrate:bookmarks -- --apply` 幂等回填缺失字段。移动在一个 User 文档内一次更新归属，保持收藏计数；取消按 Post 的真实成员关系条件更新，再重读收藏事实清理归属，逐项返回失败或 `reconciling`。
+
+前端 store 按版本接收完整快照，以账号 generation 丢弃跨账号响应。批量取消同步 `postStore` 的收藏数和书签状态；页面选择范围有独立 scope，切夹、搜索、卸载后旧响应不恢复选择。

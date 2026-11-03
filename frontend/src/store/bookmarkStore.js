@@ -1,13 +1,15 @@
 import { create } from 'zustand';
 import * as bookmarkService from '../services/bookmarkService';
 import { loadJSON } from '../utils';
+import useAuthStore from './authStore';
+import usePostStore from './postStore';
 
 const DEFAULT_FOLDERS = [{ id: 'all', name: '全部', isDefault: true }];
 const LEGACY_MIGRATION_KEY = 'nju_bookmarks_server_migrated_v1';
-let accountGeneration = 0;
 
 function sanitizeBookmarkPayload(data = {}) {
   return {
+    version: Number.isSafeInteger(data.version) ? data.version : 0,
     bookmarks: Array.isArray(data.bookmarks) ? data.bookmarks : [],
     collectionFolders: Array.isArray(data.collectionFolders) && data.collectionFolders.length > 0
       ? data.collectionFolders
@@ -52,6 +54,9 @@ function hasMigratedLegacyBookmarks() {
 
 function buildInitialState() {
   return {
+    version: 0,
+    accountGeneration: 0,
+    accountKey: null,
     bookmarks: [],
     collectionFolders: DEFAULT_FOLDERS,
     bookmarkFolders: {},
@@ -62,125 +67,127 @@ function buildInitialState() {
   };
 }
 
-const useBookmarkStore = create((set, get) => ({
-  ...buildInitialState(),
+function captureAccount(store) {
+  return { generation: store.accountGeneration, userId: useAuthStore.getState().user?._id ?? null };
+}
 
-  applyBookmarkState: (data) => {
-    const next = sanitizeBookmarkPayload(data);
-    set({
-      ...next,
-      loading: false,
-      initialized: true,
-    });
-    return next;
-  },
+function isCurrent(store, token) {
+  return store.accountGeneration === token.generation
+    && (useAuthStore.getState().user?._id ?? null) === token.userId;
+}
 
-  resetForAccountChange: () => {
-    accountGeneration += 1;
-    set(buildInitialState());
-  },
-
-  loadBookmarks: async () => {
-    const requestGeneration = accountGeneration;
-    set({ loading: true });
+const useBookmarkStore = create((set, get) => {
+  const perform = async (request, { batch = false } = {}) => {
+    const token = captureAccount(get());
     try {
-      const data = await bookmarkService.fetchBookmarks();
-      if (requestGeneration !== accountGeneration) return null;
-      let next = get().applyBookmarkState(data);
-
-      if (!hasMigratedLegacyBookmarks()) {
-        const legacyPayload = getLegacyPayload();
-        if (hasLegacyBookmarkData(legacyPayload)) {
-          const migrated = await bookmarkService.migrateLegacyBookmarks(legacyPayload);
-          if (requestGeneration !== accountGeneration) return null;
-          next = get().applyBookmarkState(migrated);
+      const data = await request();
+      if (!isCurrent(get(), token)) throw new Error('账号已切换');
+      const accepted = get().applyBookmarkState(data);
+      if (batch && accepted) {
+        for (const post of data.postStates || []) {
+          usePostStore.getState().syncSaveState(post.postId, { saved: post.isSaved, saves: post.saves });
         }
-        markLegacyMigrated();
       }
-
-      return next;
+      return data;
     } catch (error) {
-      if (requestGeneration !== accountGeneration) return null;
-      set({ loading: false, initialized: true });
+      if (isCurrent(get(), token) && (error.status === 409 || error.data?.errorCode === 'BOOKMARK_RECONCILING')) {
+        await get().loadBookmarks().catch(() => {});
+      }
       throw error;
     }
-  },
+  };
 
-  toggleBookmark: async (itemId) => {
-    if (get().bookmarks.includes(itemId)) {
-      const requestGeneration = accountGeneration;
-      const data = await bookmarkService.removeBookmark(itemId);
-      if (requestGeneration !== accountGeneration) return null;
-      get().applyBookmarkState(data);
-      return { status: 'removed', data };
-    }
+  return {
+    ...buildInitialState(),
 
-    set({
-      pendingBookmarkItem: { id: itemId, type: 'post' },
-      folderSelectorOpen: true,
-    });
-    return { status: 'selecting_folder' };
-  },
+    applyBookmarkState: (data) => {
+      const next = sanitizeBookmarkPayload(data);
+      if (next.version < get().version) {
+        set({ loading: false, initialized: true });
+        return null;
+      }
+      set({ ...next, loading: false, initialized: true });
+      return next;
+    },
 
-  removePostReferences: (postId) => {
-    set((state) => ({
-      bookmarks: state.bookmarks.filter((id) => id !== postId),
-      bookmarkFolders: Object.fromEntries(
-        Object.entries(state.bookmarkFolders).flatMap(([folderId, postIds]) => {
-          const remainingIds = postIds.filter((id) => id !== postId);
-          return remainingIds.length > 0 ? [[folderId, remainingIds]] : [];
-        }),
-      ),
-      ...(state.pendingBookmarkItem?.id === postId
-        ? { folderSelectorOpen: false, pendingBookmarkItem: null }
-        : {}),
-    }));
-  },
+    resetForAccountChange: () => {
+      set((state) => ({ ...buildInitialState(), accountGeneration: state.accountGeneration + 1 }));
+    },
 
-  selectFolder: async (folderId) => {
-    const pendingItem = get().pendingBookmarkItem;
-    if (!pendingItem?.id) return null;
+    loadBookmarks: async () => {
+      const userId = useAuthStore.getState().user?._id ?? null;
+      if (get().accountKey !== userId) {
+        set((state) => ({ ...buildInitialState(), accountKey: userId, accountGeneration: state.accountGeneration + 1 }));
+      }
+      const token = captureAccount(get());
+      set({ loading: true });
+      try {
+        const data = await bookmarkService.fetchBookmarks();
+        if (!isCurrent(get(), token)) return null;
+        let next = get().applyBookmarkState(data);
 
-    const requestGeneration = accountGeneration;
-    const data = await bookmarkService.saveBookmark(pendingItem.id, folderId);
-    if (requestGeneration !== accountGeneration) return null;
-    get().applyBookmarkState(data);
-    set({
-      folderSelectorOpen: false,
-      pendingBookmarkItem: null,
-    });
-    return { status: 'added', data };
-  },
+        if (!hasMigratedLegacyBookmarks()) {
+          const legacyPayload = getLegacyPayload();
+          if (hasLegacyBookmarkData(legacyPayload)) {
+            const migrated = await bookmarkService.migrateLegacyBookmarks(legacyPayload);
+            if (!isCurrent(get(), token)) return null;
+            next = get().applyBookmarkState(migrated);
+          }
+          markLegacyMigrated();
+        }
+        return next;
+      } catch (error) {
+        if (isCurrent(get(), token)) set({ loading: false, initialized: true });
+        throw error;
+      }
+    },
 
-  closeFolderSelector: () => {
-    set({ folderSelectorOpen: false, pendingBookmarkItem: null });
-  },
+    toggleBookmark: async (itemId) => {
+      if (get().bookmarks.includes(itemId)) {
+        const data = await perform(() => bookmarkService.removeBookmark(itemId));
+        return { status: 'removed', data };
+      }
+      set({ pendingBookmarkItem: { id: itemId, type: 'post' }, folderSelectorOpen: true });
+      return { status: 'selecting_folder' };
+    },
 
-  createFolder: async (name) => {
-    const requestGeneration = accountGeneration;
-    const data = await bookmarkService.createBookmarkFolder(name);
-    if (requestGeneration !== accountGeneration) return null;
-    return get().applyBookmarkState(data);
-  },
+    removePostReferences: (postId) => {
+      set((state) => ({
+        bookmarks: state.bookmarks.filter((id) => id !== postId),
+        bookmarkFolders: Object.fromEntries(
+          Object.entries(state.bookmarkFolders).flatMap(([folderId, postIds]) => {
+            const remainingIds = postIds.filter((id) => id !== postId);
+            return remainingIds.length > 0 ? [[folderId, remainingIds]] : [];
+          }),
+        ),
+        ...(state.pendingBookmarkItem?.id === postId
+          ? { folderSelectorOpen: false, pendingBookmarkItem: null }
+          : {}),
+      }));
+    },
 
-  renameFolder: async (folderId, name) => {
-    const requestGeneration = accountGeneration;
-    const data = await bookmarkService.renameBookmarkFolder(folderId, name);
-    if (requestGeneration !== accountGeneration) return null;
-    return get().applyBookmarkState(data);
-  },
+    selectFolder: async (folderId) => {
+      const pendingItem = get().pendingBookmarkItem;
+      if (!pendingItem?.id) return null;
+      const data = await perform(() => bookmarkService.saveBookmark(pendingItem.id, folderId));
+      set({ folderSelectorOpen: false, pendingBookmarkItem: null });
+      return { status: 'added', data };
+    },
 
-  deleteFolder: async (folderId) => {
-    const requestGeneration = accountGeneration;
-    const data = await bookmarkService.deleteBookmarkFolder(folderId);
-    if (requestGeneration !== accountGeneration) return null;
-    return get().applyBookmarkState(data);
-  },
-
-  reset: () => {
-    accountGeneration += 1;
-    set(buildInitialState());
-  },
-}));
+    closeFolderSelector: () => set({ folderSelectorOpen: false, pendingBookmarkItem: null }),
+    createFolder: (name) => perform(() => bookmarkService.createBookmarkFolder(name)),
+    renameFolder: (folderId, name) => perform(() => bookmarkService.renameBookmarkFolder(folderId, name)),
+    deleteFolder: (folderId) => perform(() => bookmarkService.deleteBookmarkFolder(folderId)),
+    moveBookmarks: (postIds, folderId) => {
+      const version = get().version;
+      return perform(() => bookmarkService.moveBookmarks(postIds, folderId, version), { batch: true });
+    },
+    removeBookmarks: (postIds) => {
+      const version = get().version;
+      return perform(() => bookmarkService.removeBookmarks(postIds, version), { batch: true });
+    },
+    reset: () => set((state) => ({ ...buildInitialState(), accountGeneration: state.accountGeneration + 1 })),
+  };
+});
 
 export default useBookmarkStore;

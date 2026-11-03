@@ -16,7 +16,7 @@ function MyPage({
   onOpenPost, onLike, onBookmark, onReport,
   collectionFolders, bookmarkFolders,
   onCreateFolder, onRenameFolder, onDeleteFolder,
-  onNavigate,
+  onNavigate, accountKey, onMoveBookmarks, onRemoveBookmarks,
 }) {
   const activeTab = useUiStore((s) => s.myTab);
   const setActiveTab = (myTab) => useUiStore.setState({ myTab });
@@ -43,6 +43,10 @@ function MyPage({
         {activeTab === 'bookmarks' && (
           <BookmarksPage
             compact
+            key={accountKey}
+            accountKey={accountKey}
+            onMoveBookmarks={onMoveBookmarks}
+            onRemoveBookmarks={onRemoveBookmarks}
             posts={posts}
             bookmarks={bookmarks}
             likedPosts={likedPosts}

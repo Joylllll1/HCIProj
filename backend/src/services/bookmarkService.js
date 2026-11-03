@@ -78,11 +78,13 @@ function sanitizeFolderMap(rawFolderMap, folders, savedPostIds) {
   const validSavedIds = new Set(savedPostIds);
   const source = mapToObject(rawFolderMap);
   const nextMap = {};
+  const assigned = new Set();
 
   for (const [folderId, postIds] of Object.entries(source)) {
     if (folderId === DEFAULT_FOLDER.id || !folderIds.has(folderId)) continue;
 
-    const ids = uniqueStrings(Array.isArray(postIds) ? postIds : []).filter((postId) => validSavedIds.has(postId));
+    const ids = uniqueStrings(Array.isArray(postIds) ? postIds : []).filter((postId) => validSavedIds.has(postId) && !assigned.has(postId));
+    ids.forEach((id) => assigned.add(id));
     if (ids.length > 0) {
       nextMap[folderId] = ids;
     }
@@ -133,42 +135,63 @@ async function getSavedPostIds(userId) {
   return posts.map((post) => post._id.toString());
 }
 
-async function loadUser(userId) {
-  const user = await User.findById(userId);
-  if (!user) {
-    throw new AppError('用户不存在', 404, 'USER_NOT_FOUND');
+// All bookmark writers share this queue in the single Node deployment.
+const userQueues = new Map();
+export async function withBookmarkLock(userId, task) {
+  const key = userId.toString();
+  const previous = userQueues.get(key) || Promise.resolve();
+  let release;
+  const current = new Promise((resolve) => { release = resolve; });
+  userQueues.set(key, current);
+  await previous;
+  try { return await task(); }
+  finally {
+    release();
+    if (userQueues.get(key) === current) userQueues.delete(key);
   }
-  return user;
 }
 
-async function normalizeAndPersist(user) {
-  const savedPostIds = await getSavedPostIds(user._id.toString());
-  const folders = sanitizeFolders(user.bookmarkFolders || []);
-  const folderMap = sanitizeFolderMap(user.bookmarkFolderMap, folders, savedPostIds);
-
-  const foldersChanged = JSON.stringify(user.bookmarkFolders || []) !== JSON.stringify(folders);
-  const mapChanged = JSON.stringify(mapToObject(user.bookmarkFolderMap)) !== JSON.stringify(folderMap);
-
-  if (foldersChanged || mapChanged) {
-    user.bookmarkFolders = folders;
-    user.bookmarkFolderMap = folderMap;
-    await user.save();
-  }
-
-  return {
-    user,
-    bookmarks: savedPostIds,
-    collectionFolders: folders,
-    bookmarkFolders: folderMap,
-  };
+async function readState(userId) {
+  const user = await User.findById(userId).lean();
+  if (!user) throw new AppError('用户不存在', 404, 'USER_NOT_FOUND');
+  const bookmarks = await getSavedPostIds(userId);
+  const collectionFolders = sanitizeFolders(user.bookmarkFolders || []);
+  return { user, bookmarks, collectionFolders,
+    bookmarkFolders: sanitizeFolderMap(user.bookmarkFolderMap, collectionFolders, bookmarks),
+    version: user.bookmarkVersion ?? 0 };
 }
 
 function buildBookmarkStateResult(state) {
-  return {
-    bookmarks: state.bookmarks,
-    collectionFolders: state.collectionFolders,
-    bookmarkFolders: state.bookmarkFolders,
-  };
+  return { bookmarks: state.bookmarks, collectionFolders: state.collectionFolders,
+    bookmarkFolders: state.bookmarkFolders, version: state.version };
+}
+
+function checkVersion(state, expectedVersion) {
+  if (!Number.isInteger(state.user.bookmarkVersion)) {
+    throw new AppError('收藏数据需要版本回填，请先运行回填脚本', 503, 'BOOKMARK_MIGRATION_REQUIRED');
+  }
+  if (expectedVersion !== undefined && state.version !== expectedVersion) {
+    throw new AppError('收藏已更新，请刷新后重试', 409, 'BOOKMARK_VERSION_CONFLICT');
+  }
+}
+
+async function persistState(userId, state) {
+  const result = await User.updateOne(
+    { _id: userId, bookmarkVersion: state.version },
+    { $set: { bookmarkFolders: state.collectionFolders, bookmarkFolderMap: state.bookmarkFolders },
+      $inc: { bookmarkVersion: 1 } },
+  );
+  if (result.matchedCount !== 1) throw new AppError('收藏已更新，请刷新后重试', 409, 'BOOKMARK_VERSION_CONFLICT');
+  state.version += 1;
+  return buildBookmarkStateResult(state);
+}
+
+async function mutate(userId, task, expectedVersion) {
+  return withBookmarkLock(userId, async () => {
+    const state = await readState(userId);
+    checkVersion(state, expectedVersion);
+    return task(state);
+  });
 }
 
 function assignBookmarkToFolder(folderMap, folderId, postId) {
@@ -189,179 +212,186 @@ function assignBookmarkToFolder(folderMap, folderId, postId) {
 }
 
 export async function getBookmarkState(userId) {
-  const user = await loadUser(userId);
-  const state = await normalizeAndPersist(user);
-  return buildBookmarkStateResult(state);
+  // Normalize responses without persisting a stale read snapshot.
+  return withBookmarkLock(userId, async () => buildBookmarkStateResult(await readState(userId)));
 }
 
 export async function createBookmarkFolder(userId, name) {
   const normalizedName = normalizeFolderName(name);
-  if (!normalizedName) {
-    throw new AppError('文件夹名称不能为空', 400, 'BOOKMARK_FOLDER_NAME_REQUIRED');
-  }
-
-  const user = await loadUser(userId);
-  const state = await normalizeAndPersist(user);
-
-  user.bookmarkFolders = [
-    ...state.collectionFolders,
-    { id: createFolderId(), name: normalizedName, isDefault: false },
-  ];
-  await user.save();
-
-  return getBookmarkState(userId);
+  if (!normalizedName) throw new AppError('文件夹名称不能为空', 400, 'BOOKMARK_FOLDER_NAME_REQUIRED');
+  return mutate(userId, async (state) => {
+    state.collectionFolders.push({ id: createFolderId(), name: normalizedName, isDefault: false });
+    return persistState(userId, state);
+  });
 }
 
-export async function renameBookmarkFolder(userId, folderId, name) {
-  if (!folderId || folderId === DEFAULT_FOLDER.id) {
-    throw new AppError('默认文件夹不支持重命名', 400, 'BOOKMARK_FOLDER_RENAME_FORBIDDEN');
-  }
-
-  const normalizedName = normalizeFolderName(name);
-  if (!normalizedName) {
-    throw new AppError('文件夹名称不能为空', 400, 'BOOKMARK_FOLDER_NAME_REQUIRED');
-  }
-
-  const user = await loadUser(userId);
-  const state = await normalizeAndPersist(user);
-
-  const targetFolder = state.collectionFolders.find((folder) => folder.id === folderId);
-  if (!targetFolder) {
-    throw new AppError('文件夹不存在', 404, 'BOOKMARK_FOLDER_NOT_FOUND');
-  }
-
-  user.bookmarkFolders = state.collectionFolders.map((folder) =>
-    folder.id === folderId ? { ...folder, name: normalizedName } : folder,
-  );
-  await user.save();
-
-  return getBookmarkState(userId);
-}
-
-export async function deleteBookmarkFolder(userId, folderId) {
-  if (!folderId || folderId === DEFAULT_FOLDER.id) {
-    throw new AppError('默认文件夹不支持删除', 400, 'BOOKMARK_FOLDER_DELETE_FORBIDDEN');
-  }
-
-  const user = await loadUser(userId);
-  const state = await normalizeAndPersist(user);
-
-  const targetFolder = state.collectionFolders.find((folder) => folder.id === folderId);
-  if (!targetFolder) {
-    throw new AppError('文件夹不存在', 404, 'BOOKMARK_FOLDER_NOT_FOUND');
-  }
-
-  user.bookmarkFolders = state.collectionFolders.filter((folder) => folder.id !== folderId);
-  const nextMap = { ...state.bookmarkFolders };
-  delete nextMap[folderId];
-  user.bookmarkFolderMap = nextMap;
-  await user.save();
-
-  return getBookmarkState(userId);
-}
-
-export async function saveBookmark(userId, postId, folderId = DEFAULT_FOLDER.id) {
-  const user = await loadUser(userId);
-  const state = await normalizeAndPersist(user);
-
+function requireFolder(state, folderId) {
   if (!state.collectionFolders.some((folder) => folder.id === folderId)) {
     throw new AppError('文件夹不存在', 404, 'BOOKMARK_FOLDER_NOT_FOUND');
   }
+}
 
-  const post = await Post.findOne({ _id: postId, isDeleted: false });
-  if (!post) {
-    throw new AppError('帖子不存在', 404, 'POST_NOT_FOUND');
-  }
+export async function renameBookmarkFolder(userId, folderId, name) {
+  if (!folderId || folderId === 'all') throw new AppError('默认文件夹不支持重命名', 400, 'BOOKMARK_FOLDER_RENAME_FORBIDDEN');
+  const normalizedName = normalizeFolderName(name);
+  if (!normalizedName) throw new AppError('文件夹名称不能为空', 400, 'BOOKMARK_FOLDER_NAME_REQUIRED');
+  return mutate(userId, async (state) => {
+    requireFolder(state, folderId);
+    state.collectionFolders = state.collectionFolders.map((folder) =>
+      folder.id === folderId ? { ...folder, name: normalizedName } : folder);
+    return persistState(userId, state);
+  });
+}
 
-  const alreadySaved = post.savedBy.some((id) => id.toString() === userId);
-  if (!alreadySaved) {
-    post.savedBy.push(userId);
-    post.saves = (post.saves || 0) + 1;
-    await post.save();
-    broadcastPostStats(post);
-  }
+export async function deleteBookmarkFolder(userId, folderId) {
+  if (!folderId || folderId === 'all') throw new AppError('默认文件夹不支持删除', 400, 'BOOKMARK_FOLDER_DELETE_FORBIDDEN');
+  return mutate(userId, async (state) => {
+    requireFolder(state, folderId);
+    state.collectionFolders = state.collectionFolders.filter((folder) => folder.id !== folderId);
+    delete state.bookmarkFolders[folderId];
+    return persistState(userId, state);
+  });
+}
 
-  user.bookmarkFolderMap = assignBookmarkToFolder(state.bookmarkFolders, folderId, postId);
-  await user.save();
+async function setPostSaved(userId, postId, saved) {
+  const post = await Post.findOneAndUpdate(
+    { _id: postId, isDeleted: false, savedBy: saved ? { $ne: userId } : userId },
+    saved ? { $addToSet: { savedBy: userId }, $inc: { saves: 1 } }
+      : [{ $set: { savedBy: { $filter: { input: '$savedBy', as: 'owner', cond: { $ne: ['$$owner', new mongoose.Types.ObjectId(userId)] } } },
+        saves: { $max: [0, { $subtract: [{ $ifNull: ['$saves', 0] }, 1] }] } } }],
+    { new: true },
+  ).lean();
+  if (post) broadcastPostStats(post);
+  return post;
+}
 
-  const nextState = await getBookmarkState(userId);
-  return {
-    saved: true,
-    saves: post.saves || 0,
-    ...nextState,
-  };
+async function saveInState(userId, postId, folderId, state) {
+  requireFolder(state, folderId);
+  const post = await setPostSaved(userId, postId, true)
+    || await Post.findOne({ _id: postId, isDeleted: false }).lean();
+  if (!post) throw new AppError('帖子不存在', 404, 'POST_NOT_FOUND');
+  state.bookmarks = [...new Set([...state.bookmarks, postId])];
+  state.bookmarkFolders = assignBookmarkToFolder(state.bookmarkFolders, folderId, postId);
+  try { return { saved: true, saves: post.saves || 0, ...await persistState(userId, state) }; }
+  catch { throw new AppError('收藏已保存，分类同步待恢复，请刷新后重试', 503, 'BOOKMARK_RECONCILING'); }
+}
+
+export async function saveBookmark(userId, postId, folderId = 'all') {
+  return mutate(userId, (state) => saveInState(userId, postId, folderId, state));
 }
 
 export async function removeBookmark(userId, postId) {
-  const post = await Post.findOne({ _id: postId, isDeleted: false });
-  if (!post) {
-    throw new AppError('帖子不存在', 404, 'POST_NOT_FOUND');
+  return mutate(userId, async (state) => {
+    const data = await removeInState(userId, [postId], state);
+    if (data.results[0].status === 'not_found') throw new AppError('帖子不存在', 404, 'POST_NOT_FOUND');
+    if (data.results[0].status === 'failed') throw new AppError('取消收藏失败，请刷新后重试', 503, 'BOOKMARK_RECONCILING');
+    return { saved: false, saves: data.postStates[0]?.saves || 0, ...data };
+  });
+}
+
+export async function toggleBookmark(userId, postId) {
+  return mutate(userId, async (state) => {
+    if (state.bookmarks.includes(postId)) {
+      const data = await removeInState(userId, [postId], state);
+      if (data.results[0].status === 'failed') throw new AppError('取消收藏失败，请刷新后重试', 503, 'BOOKMARK_RECONCILING');
+      return { saved: false, saves: data.postStates[0]?.saves || 0, ...data };
+    }
+    return saveInState(userId, postId, 'all', state);
+  });
+}
+
+export function validateBatch(payload, moving = false) {
+  const allowed = moving ? ['postIds', 'targetFolderId', 'expectedVersion'] : ['postIds', 'expectedVersion'];
+  if (!payload || Object.keys(payload).some((key) => !allowed.includes(key))
+    || !Array.isArray(payload.postIds) || payload.postIds.length < 1 || payload.postIds.length > 100
+    || payload.postIds.some((id) => typeof id !== 'string' || !/^[a-f0-9]{24}$/i.test(id))
+    || !Number.isSafeInteger(payload.expectedVersion) || payload.expectedVersion < 0
+    || (moving && (typeof payload.targetFolderId !== 'string' || !payload.targetFolderId.trim()))) {
+    throw new AppError('请选择 1–100 篇收藏并提供有效版本和目标', 400, 'BOOKMARK_BATCH_INVALID');
   }
+  return [...new Set(payload.postIds.map((id) => id.toLowerCase()))];
+}
 
-  const savedBy = post.savedBy.map((id) => id.toString());
-  const wasSaved = savedBy.includes(userId);
+function batchResult(state, results, postStates = [], reconciling = false) {
+  return { ...buildBookmarkStateResult(state), results, postStates, reconciling,
+    summary: { requested: results.length,
+      changed: results.filter((item) => ['moved', 'removed'].includes(item.status)).length,
+      unchanged: results.filter((item) => item.status === 'unchanged').length,
+      failed: results.filter((item) => item.status === 'failed').length } };
+}
 
-  if (wasSaved) {
-    post.savedBy = post.savedBy.filter((id) => id.toString() !== userId);
-    post.saves = Math.max(0, (post.saves || 0) - 1);
-    await post.save();
-    broadcastPostStats(post);
+export async function moveBookmarks(userId, payload) {
+  const ids = validateBatch(payload, true);
+  return mutate(userId, async (state) => {
+    requireFolder(state, payload.targetFolderId);
+    const posts = await Post.find({ _id: { $in: ids }, isDeleted: false }).select('_id').lean();
+    const existing = new Set(posts.map((post) => post._id.toString()));
+    const results = ids.map((postId) => {
+      if (!existing.has(postId)) return { postId, status: 'not_found' };
+      if (!state.bookmarks.includes(postId)) return { postId, status: 'not_saved' };
+      const fromFolderId = Object.keys(state.bookmarkFolders).find((key) => state.bookmarkFolders[key].includes(postId)) || 'all';
+      state.bookmarkFolders = assignBookmarkToFolder(state.bookmarkFolders, payload.targetFolderId, postId);
+      return { postId, status: fromFolderId === payload.targetFolderId ? 'unchanged' : 'moved',
+        fromFolderId, toFolderId: payload.targetFolderId };
+    });
+    if (results.some((item) => item.status === 'moved')) await persistState(userId, state);
+    return batchResult(state, results);
+  }, payload.expectedVersion);
+}
+
+async function removeInState(userId, ids, state) {
+  const results = [];
+  const postStates = [];
+  for (const postId of ids) {
+    try {
+      const changed = await setPostSaved(userId, postId, false);
+      const post = changed || await Post.findOne({ _id: postId, isDeleted: false }).lean();
+      results.push({ postId, status: changed ? 'removed' : post ? 'unchanged' : 'not_found' });
+      if (post) postStates.push({ postId, isSaved: false, saves: Math.max(0, post.saves || 0) });
+    } catch {
+      // A failed acknowledgement may follow a committed write. Verify the fact
+      // before reporting failure, and return the observed count to every page.
+      const observed = await Post.findOne({ _id: postId, isDeleted: false }).lean().catch(() => null);
+      if (observed && !observed.savedBy.some((id) => id.toString() === userId)) {
+        results.push({ postId, status: state.bookmarks.includes(postId) ? 'removed' : 'unchanged' });
+        postStates.push({ postId, isSaved: false, saves: Math.max(0, observed.saves || 0) });
+        broadcastPostStats(observed);
+      } else {
+        results.push({ postId, status: 'failed', error: '取消失败，请重试' });
+      }
+    }
   }
+  let reconciling = false;
+  try {
+    // Re-read savedBy facts before cleaning maps, including lost acknowledgements.
+    state.bookmarks = await getSavedPostIds(userId);
+    state.bookmarkFolders = sanitizeFolderMap(state.bookmarkFolders, state.collectionFolders, state.bookmarks);
+    await persistState(userId, state);
+  } catch {
+    reconciling = true;
+    const fresh = await readState(userId).catch(() => null);
+    if (!fresh) throw new AppError('部分取消可能已完成，请刷新核对后重试', 503, 'BOOKMARK_RECONCILING');
+    Object.assign(state, fresh);
+  }
+  return batchResult(state, results, postStates, reconciling);
+}
 
-  const user = await loadUser(userId);
-  const state = await normalizeAndPersist(user);
-
-  user.bookmarkFolderMap = assignBookmarkToFolder(state.bookmarkFolders, DEFAULT_FOLDER.id, postId);
-  await user.save();
-
-  const nextState = await getBookmarkState(userId);
-  return {
-    saved: false,
-    saves: post.saves || 0,
-    ...nextState,
-  };
+export async function removeBookmarks(userId, payload) {
+  const ids = validateBatch(payload);
+  return mutate(userId, (state) => removeInState(userId, ids, state), payload.expectedVersion);
 }
 
 export async function migrateLegacyBookmarks(userId, payload = {}) {
-  const incomingBookmarks = filterValidPostIds(
-    uniqueStrings(Array.isArray(payload.bookmarks) ? payload.bookmarks : []),
-  );
-  const incomingFolders = sanitizeFolders(Array.isArray(payload.collectionFolders) ? payload.collectionFolders : []);
-  const incomingFolderMap = mapToObject(payload.bookmarkFolders);
-
-  const validPosts = await Post.find({
-    _id: { $in: incomingBookmarks },
-    isDeleted: false,
+  return mutate(userId, async (state) => {
+    const ids = filterValidPostIds(uniqueStrings(Array.isArray(payload.bookmarks) ? payload.bookmarks : []));
+    const posts = await Post.find({ _id: { $in: ids }, isDeleted: false }).select('_id').lean();
+    for (const post of posts) await setPostSaved(userId, post._id.toString(), true);
+    state.bookmarks = await getSavedPostIds(userId);
+    state.collectionFolders = mergeFolderDefinitions(state.collectionFolders,
+      sanitizeFolders(Array.isArray(payload.collectionFolders) ? payload.collectionFolders : []));
+    state.bookmarkFolders = sanitizeFolderMap(mergeFolderMaps(state.bookmarkFolders, payload.bookmarkFolders),
+      state.collectionFolders, state.bookmarks);
+    try { return await persistState(userId, state); }
+    catch { throw new AppError('收藏已迁移，分类同步待恢复，请刷新后重试', 503, 'BOOKMARK_RECONCILING'); }
   });
-
-  const validPostIds = validPosts.map((post) => post._id.toString());
-
-  for (const post of validPosts) {
-    const alreadySaved = post.savedBy.some((id) => id.toString() === userId);
-    if (!alreadySaved) {
-      post.savedBy.push(userId);
-      post.saves = (post.saves || 0) + 1;
-      await post.save();
-    }
-  }
-
-  const user = await loadUser(userId);
-  const state = await normalizeAndPersist(user);
-
-  const mergedFolders = mergeFolderDefinitions(
-    state.collectionFolders,
-    incomingFolders,
-  );
-
-  const mergedMap = sanitizeFolderMap(
-    mergeFolderMaps(state.bookmarkFolders, incomingFolderMap),
-    mergedFolders,
-    [...new Set([...state.bookmarks, ...validPostIds])],
-  );
-
-  user.bookmarkFolders = mergedFolders;
-  user.bookmarkFolderMap = mergedMap;
-  await user.save();
-
-  return getBookmarkState(userId);
 }

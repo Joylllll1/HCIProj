@@ -182,37 +182,7 @@ export const toggleLike = async (userId, postId) => {
   };
 };
 
-export const toggleSave = async (userId, postId) => {
-  const unsavedPost = await Post.findOneAndUpdate(
-    { _id: postId, isDeleted: false, savedBy: userId },
-    { $pull: { savedBy: userId }, $inc: { saves: -1 } },
-    { new: true }
-  ).lean();
-
-  if (unsavedPost) {
-    broadcastPostStats(unsavedPost);
-    return { saved: false, saves: Math.max(0, unsavedPost.saves || 0) };
-  }
-
-  const savedPost = await Post.findOneAndUpdate(
-    { _id: postId, isDeleted: false, savedBy: { $ne: userId } },
-    { $addToSet: { savedBy: userId }, $inc: { saves: 1 } },
-    { new: true }
-  ).lean();
-
-  if (savedPost) {
-    broadcastPostStats(savedPost);
-    return { saved: true, saves: savedPost.saves || 0 };
-  }
-
-  const post = await Post.findOne({ _id: postId, isDeleted: false }).lean();
-  if (!post) throw new AppError('帖子不存在', 404, 'POST_NOT_FOUND');
-
-  return {
-    saved: post.savedBy?.some((id) => id.toString() === userId) || false,
-    saves: post.saves || 0,
-  };
-};
+export { toggleBookmark as toggleSave } from './bookmarkService.js';
 
 export const getSavedPosts = async (userId) => {
   const posts = await Post.find({ isDeleted: false, savedBy: userId })

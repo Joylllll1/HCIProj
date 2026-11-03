@@ -8,6 +8,10 @@ import EmptyState from '../common/EmptyState';
 import * as postService from '../../services/postService';
 import usePostStore from '../../store/postStore';
 import useUiStore from '../../store/uiStore';
+import useBookmarkSelection from '../../hooks/useBookmarkSelection';
+import useBookmarkStore from '../../store/bookmarkStore';
+import BookmarkRemovalDialog from '../common/BookmarkRemovalDialog';
+import BookmarkMoveDialog from '../common/BookmarkMoveDialog';
 import { hasSearchQuery, matchPostQuery } from '../../utils/search';
 
 const BOOKMARKS_PAGE_BATCH_SIZE = 20;
@@ -17,17 +21,19 @@ const selectQuery = (s) => s.query;
 
 function BookmarksPage({
   compact,
-  posts,
+  posts = [],
   bookmarks,
   onOpenPost,
   onLike,
-  onBookmark,
   onReport,
   collectionFolders = [],
   bookmarkFolders = {},
   onCreateFolder,
   onRenameFolder,
   onDeleteFolder,
+  accountKey,
+  onMoveBookmarks,
+  onRemoveBookmarks,
 }) {
   const activeFolder = useUiStore((s) => s.bookmarkFolder);
   const setActiveFolder = (bookmarkFolder) => useUiStore.setState({ bookmarkFolder });
@@ -46,6 +52,12 @@ function BookmarksPage({
   const [loadingSaved, setLoadingSaved] = useState(false);
   const [retryToken, setRetryToken] = useState(0);
   const [savedPosts, setSavedPosts] = useState([]);
+  const [savedPostsAccountKey, setSavedPostsAccountKey] = useState(null);
+  const [singleRemoval, setSingleRemoval] = useState(null);
+  const [singlePending, setSinglePending] = useState(false);
+  const [singleError, setSingleError] = useState('');
+  const singleRequest = useRef(false);
+  const singleScope = useRef(null);
   const [visiblePostCount, setVisiblePostCount] = useState(BOOKMARKS_PAGE_BATCH_SIZE);
   const menuRefs = useRef({});
   const menuTriggerRefs = useRef({});
@@ -64,6 +76,40 @@ function BookmarksPage({
   }, pendingFolderOperation === 'rename');
   const getPostLikeView = usePostStore(selectGetPostLikeView);
   const query = useUiStore(selectQuery);
+  const showToast = useUiStore((s) => s.showToast);
+  const bookmarkKey = bookmarks.join(',');
+  const deletedPosts = usePostStore((state) => state.removedPostIds);
+
+  useEffect(() => {
+    singleScope.current = {};
+    setSingleRemoval(null);
+    setSinglePending(false);
+    setSingleError('');
+    return () => { singleScope.current = null; };
+  }, [accountKey, activeFolder, query]);
+
+  const confirmSingleRemoval = async () => {
+    if (!singleRemoval || singleRequest.current) return;
+    const scope = singleScope.current;
+    singleRequest.current = true;
+    setSinglePending(true);
+    setSingleError('');
+    try {
+      const data = await onRemoveBookmarks([singleRemoval.id]);
+      if (singleScope.current !== scope) return;
+      if (data.results?.some((item) => item.status === 'failed')) {
+        setSingleError('取消收藏失败，请重试。');
+        return;
+      }
+      setSingleRemoval(null);
+      showToast(data.reconciling ? '已取消收藏，分类同步待恢复，请刷新核对。' : '已取消收藏');
+    } catch (error) {
+      if (singleScope.current === scope) setSingleError(error.message || '取消收藏失败，请重试。');
+    } finally {
+      singleRequest.current = false;
+      if (singleScope.current === scope) setSinglePending(false);
+    }
+  };
 
   useLayoutEffect(() => {
     if (!showFolderMenu) return undefined;
@@ -115,10 +161,11 @@ function BookmarksPage({
 
   // ── Fetch the authoritative saved post list for this user ──
   useEffect(() => {
-    if (bookmarks.length === 0) {
+    if (!bookmarkKey) {
       setLoadError('');
       setLoadingSaved(false);
       setSavedPosts([]);
+      setSavedPostsAccountKey(accountKey);
       return;
     }
 
@@ -129,6 +176,7 @@ function BookmarksPage({
       .then((data) => {
         if (!cancelled) {
           setSavedPosts(data);
+          setSavedPostsAccountKey(accountKey);
         }
       })
       .catch((err) => {
@@ -139,7 +187,7 @@ function BookmarksPage({
     return () => {
       cancelled = true;
     };
-  }, [bookmarks.length, retryToken]);
+  }, [bookmarkKey, accountKey, retryToken]);
 
   const beginFolderOperation = (operation) => {
     if (pendingFolderOperationRef.current) return false;
@@ -239,7 +287,10 @@ function BookmarksPage({
 
   // Get bookmarked posts for the active folder
   const getBookmarksForFolder = (folderId) => {
-    const source = savedPosts.length > 0 ? savedPosts : posts;
+    // Keep already available bookmarked feed items visible while the full saved
+    // list loads, then switch to the server's authoritative saved list.
+    const hasAuthoritativeSavedPosts = savedPostsAccountKey === accountKey;
+    const source = (hasAuthoritativeSavedPosts ? savedPosts : posts).filter((post) => !deletedPosts?.[post.id]);
     if (folderId === 'all') {
       // Return all bookmarked posts
       return source.filter((p) => bookmarks.includes(p.id));
@@ -254,10 +305,30 @@ function BookmarksPage({
   const visibleFolderPosts = filteredFolderPosts.slice(0, visiblePostCount);
   const totalItems = filteredFolderPosts.length;
   const searching = hasSearchQuery(query);
+  const batch = useBookmarkSelection({
+    scope: `${accountKey || ''}:${activeFolder}:${query}`,
+    visibleIds: visibleFolderPosts.map((post) => post.id),
+    onMove: onMoveBookmarks,
+    onRemove: onRemoveBookmarks,
+    onRefresh: () => useBookmarkStore.getState().loadBookmarks(),
+  });
+  const allSelected = visibleFolderPosts.length > 0
+    && visibleFolderPosts.slice(0, 100).every((post) => batch.selected.includes(post.id));
+  const selectAllRef = useRef(null);
+
+  useEffect(() => {
+    if (selectAllRef.current) selectAllRef.current.indeterminate = batch.selected.length > 0 && !allSelected;
+  }, [batch.selected.length, allSelected]);
+
+  const { target, setTarget } = batch;
+  useEffect(() => {
+    if (!collectionFolders.some((folder) => folder.id === activeFolder)) setActiveFolder('all');
+    if (target && !collectionFolders.some((folder) => folder.id === target)) setTarget('');
+  }, [collectionFolders, activeFolder, target, setTarget]);
 
   useEffect(() => {
     setVisiblePostCount(BOOKMARKS_PAGE_BATCH_SIZE);
-  }, [activeFolder, query]);
+  }, [activeFolder, query, accountKey]);
 
   useEffect(() => {
     if (!deleteFolderTarget && focusAllAfterDeleteRef.current) {
@@ -271,6 +342,14 @@ function BookmarksPage({
       {!compact && (
         <PageHeader title="我的收藏" description="按收藏夹整理，留着慢慢看。" actions={<button className="secondary-button" onClick={openCreateFolder} type="button"><Icon name="add" />新建收藏夹</button>} />
       )}
+
+      <div className="bookmark-page-actions flex justify-end gap-3 my-4">
+        <button ref={batch.manageRef} type="button" className="secondary-button"
+          disabled={batch.pending || (!batch.managing && (loadingSaved || Boolean(loadError) || !totalItems))}
+          onClick={() => batch.managing ? batch.finish() : batch.setManaging(true)}>
+          {batch.managing ? '完成' : '批量管理'}
+        </button>
+      </div>
 
       <div className="category-row collection-tabs flex flex-wrap gap-3 max-sm:gap-1 my-[22px] items-center">
         {collectionFolders.map((folder) => {
@@ -291,6 +370,7 @@ function BookmarksPage({
                     : 'bg-surface text-text-2 border-line hover:border-blue/40 hover:text-blue hover:shadow-sm'
                 }`}
                 aria-pressed={isActive}
+                disabled={batch.pending}
                 onClick={() => { setActiveFolder(folder.id); setShowFolderMenu(null); }}
                 type="button"
               >
@@ -315,6 +395,7 @@ function BookmarksPage({
                     aria-label={`更多收藏夹操作：${folder.name}`}
                     aria-expanded={isMenuOpen}
                     aria-controls={`${disclosureId}-folder-${encodeURIComponent(folder.id)}`}
+                    disabled={batch.pending}
                   >
                     <Icon name="more_horiz" style={{ fontSize: '16px' }} />
                   </button>
@@ -360,7 +441,26 @@ function BookmarksPage({
         </p>
       )}
 
-      {loadError && <div className="feed-error" role="alert"><span>{loadError}</span><button type="button" onClick={() => setRetryToken((n) => n + 1)}>重试加载收藏</button></div>}
+      {batch.managing && (
+        <section aria-label="收藏批量管理" className="bookmark-selection-toolbar mb-4 rounded-md border border-line bg-surface p-4">
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="inline-flex items-center gap-2 text-sm">
+              <input ref={selectAllRef} type="checkbox" disabled={batch.pending || !visibleFolderPosts.length}
+                checked={allSelected} onChange={batch.selectAll} />
+              全选
+            </label>
+            <span role="status" className="text-sm text-text-2">已选 {batch.selected.length} 篇</span>
+            <button ref={batch.moveRef} type="button" className="secondary-button"
+              disabled={batch.pending || !batch.selected.length} onClick={batch.openTarget}>移动到</button>
+            <button type="button" className="secondary-button" disabled={batch.pending || !batch.selected.length}
+              onClick={() => batch.setConfirming(true)}>取消收藏</button>
+          </div>
+          {batch.selected.length >= 100 && <p role="status" className="mt-3 text-sm text-text-2">每次最多选择 100 篇，可取消部分选择后再选其他收藏。</p>}
+        </section>
+      )}
+      <p ref={batch.resultRef} role="status" tabIndex={-1} className="mb-4 text-sm text-text-2">{batch.choosingTarget ? '' : batch.message}</p>
+
+      {loadError && <div className="feed-error" role="alert"><span>{loadError}</span><button type="button" onClick={() => setRetryToken((n) => n + 1)}>重新加载</button></div>}
       {loadingSaved && <p role="status">正在加载收藏…</p>}
       {totalItems === 0 && (loadError || loadingSaved) ? null : totalItems === 0 ? (
         <EmptyState
@@ -380,17 +480,25 @@ function BookmarksPage({
               const postView = getPostLikeView(post);
               return (
                 <div key={postView.id} className="saved-post-entry">
-                  <PostCard
-                    compact
-                    post={postView}
-                    onOpen={() => onOpenPost(post)}
-                    previewMode
-                    liked={postView.isLiked}
-                    bookmarked
-                    onLike={() => onLike(post.id)}
-                    onBookmark={() => onBookmark(post.id)}
-                    onReport={onReport}
-                  />
+                  {batch.managing ? (
+                    <label className={`bookmark-selection-card block cursor-pointer rounded-md border p-4 bg-surface ${batch.selected.includes(post.id) ? 'border-blue' : 'border-line'}`}>
+                      <span className="flex items-start gap-3">
+                        <input type="checkbox" className="mt-1 shrink-0" aria-label={`选择收藏：${post.title}`}
+                          checked={batch.selected.includes(post.id)} disabled={batch.pending || (batch.selected.length >= 100 && !batch.selected.includes(post.id))}
+                          onChange={() => batch.toggle(post.id)} />
+                        <span className="min-w-0">
+                          <strong className="block break-words text-lg">{post.title}</strong>
+                          <span className="mt-2 block whitespace-pre-line break-words line-clamp-4 text-sm text-text-2">{post.content}</span>
+                          {(post.images?.[0] || post.image) && <img alt="" src={post.images?.[0] || post.image} className="mt-3 max-h-40 max-w-full rounded-sm object-contain" />}
+                          <span className="mt-3 block text-xs text-text-3">{(post.tags || []).map((tag) => `#${tag}`).join(' ')}</span>
+                        </span>
+                      </span>
+                    </label>
+                  ) : (
+                    <PostCard compact post={postView} onOpen={() => onOpenPost(post)} previewMode
+                      liked={postView.isLiked} bookmarked onLike={() => onLike(post.id)}
+                      onBookmark={() => { setSingleError(''); setSingleRemoval(post); }} onReport={onReport} />
+                  )}
                 </div>
               );
             })}
@@ -408,6 +516,18 @@ function BookmarksPage({
           )}
         </>
       )}
+
+      {batch.choosingTarget && <BookmarkMoveDialog
+        folders={collectionFolders} activeFolder={activeFolder} target={batch.target} onSelect={batch.setTarget}
+        count={batch.selected.length} pending={batch.pending} message={batch.message}
+        onCancel={() => batch.setChoosingTarget(false)} onConfirm={() => batch.execute('move')} />}
+
+      {singleRemoval && <BookmarkRemovalDialog titles={[singleRemoval.title]} pending={singlePending}
+        message={singleError} onCancel={() => setSingleRemoval(null)} onConfirm={confirmSingleRemoval} />}
+
+      {batch.confirming && <BookmarkRemovalDialog
+        titles={batch.selected.map((id) => savedPosts.find((post) => post.id === id)?.title || '收藏帖子')}
+        pending={batch.pending} onCancel={() => batch.setConfirming(false)} onConfirm={() => batch.execute('remove')} />}
 
       {/* New Folder Modal */}
       {showNewFolderModal && (

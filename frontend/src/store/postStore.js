@@ -539,10 +539,13 @@ const usePostStore = create((set, get) => ({
     }
   },
 
+  removedPostIds: {},
+
   removePostById: (postId, options = {}) => {
     const shouldClearSelectedPost = options.clearSelectedPost !== false;
     useBookmarkStore.getState().removePostReferences(postId);
     set((state) => ({
+      removedPostIds: { ...state.removedPostIds, [postId]: true },
       myPosts: state.myPosts.filter((p) => p.id !== postId),
       posts: state.posts.filter((p) => p.id !== postId),
       postStatsById: Object.fromEntries(
