@@ -1,11 +1,16 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useId } from 'react';
 import ReactDOM from 'react-dom';
 import Icon from '../common/Icon';
+import useDialogFocus from '../../hooks/useDialogFocus';
 
 function ReportModal({ targetId, targetType, onClose, onSubmit }) {
   const [selectedReason, setSelectedReason] = useState('');
   const [otherReason, setOtherReason] = useState('');
   const [mounted, setMounted] = useState(false);
+  const dialogRef = useRef(null);
+  const titleId = useId();
+  const reasonId = useId();
+  useDialogFocus(dialogRef, mounted, onClose);
 
   useEffect(() => {
     setMounted(true);
@@ -26,9 +31,9 @@ function ReportModal({ targetId, targetType, onClose, onSubmit }) {
 
   const modalContent = (
     <div className="modal-overlay fixed inset-0 z-[150] grid place-items-center bg-black/40 backdrop-blur-sm animate-modal-fade-in" onClick={onClose}>
-      <div className="modal-content w-[min(480px,90vw)] rounded-2xl bg-white/90 backdrop-blur-md shadow-glass animate-modal-scale-in p-6 max-sm:p-4" onClick={(e) => e.stopPropagation()}>
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId} className="modal-content w-[min(480px,90vw)] rounded-2xl bg-surface/90 backdrop-blur-md shadow-glass animate-modal-scale-in p-6 max-sm:p-4" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-5">
-          <h2 className="text-2xl tracking-tight">举报{targetType === 'post' ? '帖子' : '评论'}</h2>
+          <h2 id={titleId} className="text-2xl tracking-tight">举报{targetType === 'post' ? '帖子' : '评论'}</h2>
           <button
             className="grid w-8 h-8 place-items-center border-0 rounded-full bg-transparent text-text-3 hover:bg-surface-soft transition-colors duration-150"
             onClick={onClose}
@@ -66,9 +71,10 @@ function ReportModal({ targetId, targetType, onClose, onSubmit }) {
 
         {selectedReason === '其他' && (
           <div className="other-reason mb-4 animate-modal-fade-in">
-            <label className="block text-sm font-semibold text-text-2 mb-2">请详细说明原因：</label>
+            <label htmlFor={reasonId} className="block text-sm font-semibold text-text-2 mb-2">请详细说明原因：</label>
             <textarea
-              className="w-full px-4 py-3 border border-line rounded-lg bg-white text-text text-sm min-h-[100px] resize-y focus:outline-none focus:border-blue"
+              id={reasonId}
+              className="w-full px-4 py-3 border border-line rounded-lg bg-surface text-text text-sm min-h-[100px] resize-y focus:outline-none focus:border-blue"
               placeholder="请输入具体的举报内容..."
               value={otherReason}
               onChange={(e) => setOtherReason(e.target.value)}
@@ -78,7 +84,7 @@ function ReportModal({ targetId, targetType, onClose, onSubmit }) {
 
         <div className="modal-actions flex justify-end gap-2.5 mt-6 max-sm:flex-col max-sm:gap-2">
           <button
-            className="secondary-button inline-flex items-center justify-center gap-[7px] border border-line rounded-full px-5 py-[10px] bg-white text-text-2 text-sm font-semibold transition-all duration-150 hover:bg-surface-soft"
+            className="secondary-button inline-flex items-center justify-center gap-[7px] border border-line rounded-full px-5 py-[10px] bg-surface text-text-2 text-sm font-semibold transition-all duration-150 hover:bg-surface-soft"
             onClick={onClose}
             type="button"
           >

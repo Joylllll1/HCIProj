@@ -1,8 +1,6 @@
 # Dependencies
 node_modules/
-package-lock.json
-!backend/package-lock.json
-!frontend/package-lock.json
+# package-lock.json 入库（两端都要），其他包管理器锁文件不入库
 yarn.lock
 pnpm-lock.yaml
 
@@ -27,6 +25,7 @@ yarn-error.log*
 lerna-debug.log*
 
 # Runtime data
+backend/storage/images/
 pids/
 *.pid
 *.seed
@@ -63,8 +62,20 @@ mongod.lock
 # Redundant tool config
 .codex/
 
+# Personal agent instructions (shared rules live in AGENTS.md)
+CLAUDE.md
+CLAUDE.local.md
+.claude/
+
 # Temporary attachments
 .attachments/
 
 # Development screenshots
 **/截屏*.png
+
+# Local browser verification artifacts
+.playwright-cli/
+
+# Local design inspection and browser artifacts
+.impeccable/
+**/output/playwright/

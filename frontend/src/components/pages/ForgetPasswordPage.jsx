@@ -1,3 +1,4 @@
+import Select from '../common/Select';
 import React from 'react';
 import Icon from '../common/Icon';
 import { sendVerifyCode, checkVerifyCode } from '../../services/verifyService';
@@ -17,37 +18,83 @@ export default function ForgetPasswordPage({ onNavigate }) {
   const [newPassword, setNewPassword] = React.useState('');
   const [confirmPassword, setConfirmPassword] = React.useState('');
   const [countdown, setCountdown] = React.useState(0);
+  const [sentEmail, setSentEmail] = React.useState('');
+  const [codeLoading, setCodeLoading] = React.useState(false);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState('');
   const [fieldErrors, setFieldErrors] = React.useState({});
+  const codeRequestLockRef = React.useRef(false);
+  const submitLockRef = React.useRef(false);
+  const countdownTimerRef = React.useRef(null);
 
   const email = prefix + domain;
+  const emailRef = React.useRef(email);
+  emailRef.current = email;
+
+  const clearCountdown = () => {
+    if (countdownTimerRef.current) {
+      clearInterval(countdownTimerRef.current);
+      countdownTimerRef.current = null;
+    }
+  };
+
+  React.useEffect(() => () => {
+    if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
+  }, []);
+
+  const handleAddressChange = (nextPrefix, nextDomain) => {
+    if (codeRequestLockRef.current || submitLockRef.current) return;
+    const nextEmail = nextPrefix + nextDomain;
+    emailRef.current = nextEmail;
+    if (nextEmail !== email) {
+      clearCountdown();
+      setSentEmail('');
+      setVerifyCode('');
+      setCountdown(0);
+      setFieldErrors((prev) => ({ ...prev, verifyCode: '' }));
+      setError('');
+    }
+    setPrefix(nextPrefix);
+    setDomain(nextDomain);
+  };
 
   const handleSendCode = async () => {
+    if (codeRequestLockRef.current || submitLockRef.current || countdown > 0) return;
     if (!prefix || !/^[a-zA-Z0-9._%+-]+$/.test(prefix)) {
       setError('请输入有效的邮箱前缀');
       return;
     }
-    setLoading(true);
+    const requestedEmail = email;
+    codeRequestLockRef.current = true;
+    setCodeLoading(true);
     setError('');
     try {
-      await sendVerifyCode(email, 'reset_password');
+      await sendVerifyCode(requestedEmail, 'reset_password');
+      if (emailRef.current !== requestedEmail) return;
+      setSentEmail(requestedEmail);
+      clearCountdown();
       setCountdown(60);
-      const timer = setInterval(() => {
-        setCountdown((c) => {
-          if (c <= 1) { clearInterval(timer); return 0; }
-          return c - 1;
-        });
+      let remaining = 60;
+      countdownTimerRef.current = setInterval(() => {
+        remaining -= 1;
+        if (remaining <= 0) {
+          clearCountdown();
+          setCountdown(0);
+        } else {
+          setCountdown(remaining);
+        }
       }, 1000);
     } catch (err) {
       setError(err.message);
     } finally {
-      setLoading(false);
+      codeRequestLockRef.current = false;
+      setCodeLoading(false);
     }
   };
 
   const handleReset = async (e) => {
     e.preventDefault();
+    if (submitLockRef.current || codeRequestLockRef.current) return;
     setError('');
     setFieldErrors({});
 
@@ -66,15 +113,21 @@ export default function ForgetPasswordPage({ onNavigate }) {
       return;
     }
 
+    if (!sentEmail || sentEmail !== email) {
+      setFieldErrors((prev) => ({ ...prev, verifyCode: '请先向当前邮箱获取验证码' }));
+      return;
+    }
+
+    submitLockRef.current = true;
     setLoading(true);
     try {
       // Verify code first
-      await checkVerifyCode(email, verifyCode, 'reset_password');
+      await checkVerifyCode(sentEmail, verifyCode, 'reset_password');
       // Then reset password
       const res = await fetch(`${API_BASE}/api/password/reset`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, code: verifyCode, password: newPassword }),
+        body: JSON.stringify({ email: sentEmail, code: verifyCode, password: newPassword }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || '重置失败');
@@ -89,6 +142,7 @@ export default function ForgetPasswordPage({ onNavigate }) {
         setError(msg);
       }
     } finally {
+      submitLockRef.current = false;
       setLoading(false);
     }
   };
@@ -96,10 +150,10 @@ export default function ForgetPasswordPage({ onNavigate }) {
   if (step === 'done') {
     return (
       <div className="auth-page">
-        <div className="auth-brand">
-          <span className="auth-brand-mark">Ｎ</span>
-          <span className="auth-brand-text">NJU 树洞</span>
-        </div>
+        <button type="button" className="auth-brand auth-brand-button" onClick={() => onNavigate('home')} aria-label="返回南大树洞首页">
+          <span className="auth-brand-mark"><Icon name="park" /></span>
+          <span className="auth-brand-text">南大树洞</span>
+        </button>
         <div className="auth-card">
           <div className="grid place-items-center py-6">
             <div className="w-14 h-14 rounded-full bg-green-100 text-green-600 grid place-items-center mb-4">
@@ -118,10 +172,10 @@ export default function ForgetPasswordPage({ onNavigate }) {
 
   return (
     <div className="auth-page">
-      <div className="auth-brand">
-        <span className="auth-brand-mark">Ｎ</span>
-        <span className="auth-brand-text">NJU 树洞</span>
-      </div>
+      <button type="button" className="auth-brand auth-brand-button" onClick={() => onNavigate('home')} aria-label="返回南大树洞首页">
+        <span className="auth-brand-mark"><Icon name="park" /></span>
+        <span className="auth-brand-text">南大树洞</span>
+      </button>
 
       <div className="auth-card">
         <button
@@ -137,7 +191,7 @@ export default function ForgetPasswordPage({ onNavigate }) {
         <p className="auth-subtitle">通过邮箱验证码重置密码</p>
 
         {error && (
-          <div className="auth-general-error">
+          <div className="auth-general-error" role="alert">
             <Icon name="error_outline" />
             <span>{error}</span>
           </div>
@@ -154,15 +208,11 @@ export default function ForgetPasswordPage({ onNavigate }) {
                 className="auth-email-input"
                 placeholder="学号"
                 value={prefix}
-                onChange={(e) => { setPrefix(e.target.value); setError(''); }}
-                disabled={loading}
+                onChange={(e) => handleAddressChange(e.target.value, domain)}
+                disabled={loading || codeLoading}
                 autoComplete="off"
               />
-              <select className="auth-email-select" value={domain} onChange={(e) => setDomain(e.target.value)} disabled={loading}>
-                {DOMAINS.map((d) => (
-                  <option key={d.value} value={d.value}>{d.label}</option>
-                ))}
-              </select>
+              <Select aria-label="学校邮箱后缀" className="auth-email-select" value={domain} onChange={(nextDomain) => handleAddressChange(prefix, nextDomain)} disabled={loading || codeLoading} options={DOMAINS.map(d => ({ value: d.value, label: d.label }))} />
             </div>
           </div>
 
@@ -178,27 +228,30 @@ export default function ForgetPasswordPage({ onNavigate }) {
                 maxLength={6}
                 value={verifyCode}
                 onChange={(e) => { setVerifyCode(e.target.value.replace(/\D/g, '').slice(0, 6)); setFieldErrors((prev) => ({ ...prev, verifyCode: '' })); }}
-                disabled={loading}
+                disabled={loading || codeLoading}
                 autoComplete="off"
               />
               <button
                 type="button"
                 className={`auth-code-btn ${countdown > 0 ? 'auth-code-btn-disabled' : ''}`}
                 onClick={handleSendCode}
-                disabled={loading || countdown > 0}
+                disabled={loading || codeLoading || countdown > 0}
               >
-              {loading ? (
+              {codeLoading ? (
                   <span className="flex items-center gap-1.5">
                     <Icon name="loop" />
                     <span>发送中</span>
                   </span>
                 ) : countdown > 0 ? (
                   `${countdown}s`
+                ) : sentEmail ? (
+                  '重新发送'
                 ) : (
                   '发送验证码'
                 )}
               </button>
             </div>
+            {sentEmail && <p className="auth-subtitle" role="status">验证码已发送至 {sentEmail}</p>}
             {fieldErrors.verifyCode && <p className="auth-error-text">{fieldErrors.verifyCode}</p>}
           </div>
 
@@ -212,7 +265,7 @@ export default function ForgetPasswordPage({ onNavigate }) {
               placeholder="至少 8 位，包含字母和数字"
               value={newPassword}
               onChange={(e) => { setNewPassword(e.target.value); setFieldErrors((prev) => ({ ...prev, password: '' })); }}
-              disabled={loading}
+              disabled={loading || codeLoading}
               autoComplete="new-password"
             />
             {fieldErrors.password && <p className="auth-error-text">{fieldErrors.password}</p>}
@@ -228,13 +281,13 @@ export default function ForgetPasswordPage({ onNavigate }) {
               placeholder="再次输入新密码"
               value={confirmPassword}
               onChange={(e) => { setConfirmPassword(e.target.value); setFieldErrors((prev) => ({ ...prev, confirmPassword: '' })); }}
-              disabled={loading}
+              disabled={loading || codeLoading}
               autoComplete="new-password"
             />
             {fieldErrors.confirmPassword && <p className="auth-error-text">{fieldErrors.confirmPassword}</p>}
           </div>
 
-          <button type="submit" className="auth-submit" disabled={loading}>
+          <button type="submit" className="auth-submit" disabled={loading || codeLoading}>
             {loading ? (
               <span className="auth-spinner">
                 <Icon name="loop" />

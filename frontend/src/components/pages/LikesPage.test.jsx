@@ -85,4 +85,14 @@ describe('LikesPage progressive loading', () => {
     fireEvent.click(screen.getByRole('button', { name: '加载更多' }));
     expect(screen.getByText('Liked post 25')).toBeInTheDocument();
   });
+
+  it('offers a direct retry after a failed load', async () => {
+    fetchLikes.mockRejectedValueOnce(new Error('网络暂时断开')).mockResolvedValueOnce({ posts: likedPosts, comments: [] });
+    render(<LikesPage posts={likedPosts} likedPosts={[]} onOpenPost={vi.fn()} onReport={vi.fn()} />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('网络暂时断开');
+    expect(screen.queryByText('还没有赞过的帖子')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '重新加载喜爱' }));
+    await screen.findByText('Liked post 1');
+    expect(fetchLikes).toHaveBeenCalledTimes(2);
+  });
 });

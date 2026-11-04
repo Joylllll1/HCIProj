@@ -25,7 +25,7 @@ function EventDetailModal({ event, onClose }) {
 
   return (
     <div className="modal-overlay fixed inset-0 z-[150] grid place-items-center bg-black/40 animate-modal-fade-in" onClick={onClose}>
-      <div className="modal-content w-[min(600px,90vw)] max-h-[85vh] overflow-y-auto rounded-lg bg-white shadow-md animate-modal-scale-in" onClick={(e) => e.stopPropagation()}>
+      <div className="modal-content w-[min(600px,90vw)] max-h-[85vh] overflow-y-auto rounded-lg bg-surface shadow-md animate-modal-scale-in" onClick={(e) => e.stopPropagation()}>
         {event.poster && (
           <img src={event.poster} alt={event.title} className="w-full h-[260px] object-cover rounded-t-lg" />
         )}
@@ -71,7 +71,7 @@ function RejectionModal({ onClose, onSubmit }) {
 
   return (
     <div className="modal-overlay fixed inset-0 z-[150] grid place-items-center bg-black/40 animate-modal-fade-in" onClick={onClose}>
-      <div className="modal-content w-[min(500px,90vw)] rounded-lg bg-white shadow-md animate-modal-scale-in" onClick={(e) => e.stopPropagation()}>
+      <div className="modal-content w-[min(500px,90vw)] rounded-lg bg-surface shadow-md animate-modal-scale-in" onClick={(e) => e.stopPropagation()}>
         <div className="p-6">
           <h2 className="text-2xl tracking-tight mb-2">拒绝活动</h2>
           <p className="text-text-2 text-sm mb-6">请选择拒绝理由，该反馈将发送给申请人。</p>
@@ -83,7 +83,7 @@ function RejectionModal({ onClose, onSubmit }) {
                 className={`w-full text-left px-4 py-3 border rounded-md text-sm transition-colors duration-150 ${
                   selectedReason === reason
                     ? 'border-blue bg-blue-soft text-blue font-semibold'
-                    : 'border-line-soft bg-white text-text-2 hover:bg-surface-soft'
+                    : 'border-line-soft bg-surface text-text-2 hover:bg-surface-soft'
                 }`}
                 onClick={() => { setSelectedReason(reason); setCustomReason(''); }}
                 type="button"
@@ -95,7 +95,7 @@ function RejectionModal({ onClose, onSubmit }) {
               className={`w-full text-left px-4 py-3 border rounded-md text-sm transition-colors duration-150 ${
                 selectedReason === 'other'
                   ? 'border-blue bg-blue-soft text-blue font-semibold'
-                  : 'border-line-soft bg-white text-text-2 hover:bg-surface-soft'
+                  : 'border-line-soft bg-surface text-text-2 hover:bg-surface-soft'
               }`}
               onClick={() => setSelectedReason('other')}
               type="button"
@@ -107,7 +107,7 @@ function RejectionModal({ onClose, onSubmit }) {
           {selectedReason === 'other' && (
             <textarea
               autoFocus
-              className="w-full min-h-[80px] p-3 border border-line rounded-md bg-white text-text text-sm resize-y mb-4"
+              className="w-full min-h-[80px] p-3 border border-line rounded-md bg-surface text-text text-sm resize-y mb-4"
               placeholder="请输入拒绝理由..."
               value={customReason}
               onChange={(e) => setCustomReason(e.target.value)}
@@ -115,7 +115,7 @@ function RejectionModal({ onClose, onSubmit }) {
           )}
 
           <div className="flex justify-end gap-3 pt-4 border-t border-line-soft">
-            <button className="secondary-button inline-flex items-center justify-center gap-[7px] border border-line rounded-full px-4 py-[10px] bg-white text-text-2 text-sm font-semibold transition-all duration-150" onClick={onClose} type="button">取消</button>
+            <button className="secondary-button inline-flex items-center justify-center gap-[7px] border border-line rounded-full px-4 py-[10px] bg-surface text-text-2 text-sm font-semibold transition-all duration-150" onClick={onClose} type="button">取消</button>
             <button className="primary-button inline-flex items-center justify-center gap-[7px] border-0 rounded-full px-[18px] py-[10px] text-white bg-blue font-bold shadow-sm transition-all duration-150 hover:-translate-y-px hover:bg-blue-2 disabled:opacity-50 disabled:cursor-not-allowed" onClick={handleSubmit} disabled={!canSubmit} type="button">确认拒绝</button>
           </div>
         </div>
@@ -306,7 +306,7 @@ function AdminPage({ reports, onDismiss, pendingEvents, onApproveEvent, onReject
               ) : (
                 <>
                   {reports.map((report) => (
-                    <article key={report.id} className={`report-card p-5 border rounded-xl bg-surface backdrop-blur-sm shadow-sm ${report.risk === 'high' ? 'border-l-4 border-l-red' : 'border-line-soft'}`}>
+                    <article key={report.id} className={`report-card p-5 border rounded-xl bg-surface backdrop-blur-sm shadow-sm ${report.risk === 'high' ? 'border-red' : 'border-line-soft'}`}>
                       <div className="flex items-start justify-between gap-4 mb-3">
                         <div className="flex items-center gap-3">
                           <span className="text-text-3 text-xs font-mono">{report.id}</span>
@@ -322,9 +322,9 @@ function AdminPage({ reports, onDismiss, pendingEvents, onApproveEvent, onReject
                         <span className="text-text-3 text-xs">{report.source}</span>
                         <div className="flex gap-2">
                           {getPostFromReport(report) && (
-                            <button className="px-3 py-2 text-xs font-semibold border border-line rounded-full bg-white text-blue hover:bg-blue-soft transition-colors duration-150" onClick={() => handleViewReportDetail(report)} type="button">查看详情</button>
+                            <button className="px-3 py-2 text-xs font-semibold border border-line rounded-full bg-surface text-blue hover:bg-blue-soft transition-colors duration-150" onClick={() => handleViewReportDetail(report)} type="button">查看详情</button>
                           )}
-                          <button className="px-3 py-2 text-xs font-semibold border border-line rounded-full bg-white text-text-2 hover:bg-surface-soft transition-colors duration-150" onClick={() => onDismiss(report.id)} type="button">驳回举报</button>
+                          <button className="px-3 py-2 text-xs font-semibold border border-line rounded-full bg-surface text-text-2 hover:bg-surface-soft transition-colors duration-150" onClick={() => onDismiss(report.id)} type="button">驳回举报</button>
                           <button className="px-3 py-2 text-xs font-semibold border-0 rounded-full bg-red text-white hover:bg-red-2 transition-colors duration-150" onClick={() => onDismiss(report.id)} type="button">删除内容</button>
                         </div>
                       </div>
@@ -343,7 +343,7 @@ function AdminPage({ reports, onDismiss, pendingEvents, onApproveEvent, onReject
               ) : (
                 <div className="grid grid-cols-2 gap-4 max-lg:grid-cols-1">
                   {pendingEvents.map((event) => (
-                    <article key={event.id} className="event-card border border-line-soft rounded-lg bg-white shadow-sm overflow-hidden hover:shadow-md transition-shadow duration-150">
+                    <article key={event.id} className="event-card border border-line-soft rounded-lg bg-surface shadow-sm overflow-hidden hover:shadow-md transition-shadow duration-150">
                       {event.poster && (
                         <div className="aspect-video overflow-hidden bg-surface-soft">
                           <img src={event.poster} alt={event.title} className="w-full h-full object-cover" />
@@ -394,7 +394,7 @@ function AdminPage({ reports, onDismiss, pendingEvents, onApproveEvent, onReject
               ) : (
                 <div className="grid grid-cols-3 gap-4 max-lg:grid-cols-2 max-sm:grid-cols-1">
                   {carouselItems.map((item) => (
-                    <article key={item.id} className="carousel-item-card border border-line-soft rounded-lg bg-white shadow-sm overflow-hidden hover:shadow-md transition-shadow duration-150">
+                    <article key={item.id} className="carousel-item-card border border-line-soft rounded-lg bg-surface shadow-sm overflow-hidden hover:shadow-md transition-shadow duration-150">
                       <div className="relative aspect-video overflow-hidden bg-surface-soft">
                         <img src={item.image || item.poster} alt={item.title} className="w-full h-full object-cover" />
                         <span className="absolute top-2 left-2 px-2 py-1 rounded-full text-[10px] font-semibold bg-black/60 text-white backdrop-blur-sm">轮播 {carouselItems.indexOf(item) + 1}</span>
@@ -425,14 +425,14 @@ function AdminPage({ reports, onDismiss, pendingEvents, onApproveEvent, onReject
         {/* Right Sidebar */}
         <aside className="space-y-4">
           {/* Identity Lookup */}
-          <section className="sidebar-card p-5 border border-line-soft rounded-lg bg-white shadow-sm">
+          <section className="sidebar-card p-5 border border-line-soft rounded-lg bg-surface shadow-sm">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-sm font-bold">实名映射查询</h3>
               <Icon name="fingerprint" className="text-text-3" />
             </div>
             <p className="text-text-2 text-xs leading-relaxed mb-4">仅用于处理安全或法律等紧急事务。所有查询均记录审计日志。</p>
             <div className="flex gap-2 mb-4">
-              <input className="flex-1 h-9 px-3 text-sm border border-line rounded-md bg-white" placeholder="匿名 ID..." />
+              <input className="flex-1 h-9 px-3 text-sm border border-line rounded-md bg-surface" placeholder="匿名 ID..." />
               <button className="h-9 px-4 text-sm font-semibold border-0 rounded-md bg-blue text-white hover:bg-blue-2 transition-colors duration-150" type="button">检索</button>
             </div>
             <div className="pt-4 border-t border-line-soft grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-xs">
@@ -470,7 +470,7 @@ function AdminPage({ reports, onDismiss, pendingEvents, onApproveEvent, onReject
       {/* Carousel Selector Modal */}
       {carouselSelectorOpen && (
         <div className="modal-overlay fixed inset-0 z-[150] grid place-items-center bg-black/40 animate-modal-fade-in" onClick={() => setCarouselSelectorOpen(false)}>
-          <div className="modal-content w-[min(900px,90vw)] max-h-[85vh] overflow-y-auto rounded-lg bg-white shadow-md animate-modal-scale-in" onClick={(e) => e.stopPropagation()}>
+          <div className="modal-content w-[min(900px,90vw)] max-h-[85vh] overflow-y-auto rounded-lg bg-surface shadow-md animate-modal-scale-in" onClick={(e) => e.stopPropagation()}>
             <div className="p-6">
               <h2 className="text-2xl tracking-tight mb-2">添加轮播活动</h2>
               <p className="text-text-2 text-sm mb-6">从已通过审核的活动中选择添加到首页轮播</p>
@@ -482,7 +482,7 @@ function AdminPage({ reports, onDismiss, pendingEvents, onApproveEvent, onReject
                   {approvedEvents
                     .filter((event) => !carouselItems.find((item) => item.id === event.id))
                     .map((event) => (
-                      <article key={event.id} className="border border-line-soft rounded-lg bg-white shadow-sm overflow-hidden hover:shadow-md hover:border-blue transition-all duration-150 cursor-pointer" onClick={() => handleAddToCarousel(event)}>
+                      <article key={event.id} className="border border-line-soft rounded-lg bg-surface shadow-sm overflow-hidden hover:shadow-md hover:border-blue transition-all duration-150 cursor-pointer" onClick={() => handleAddToCarousel(event)}>
                         <div className="aspect-video overflow-hidden bg-surface-soft">
                           <img src={event.image || event.poster} alt={event.title} className="w-full h-full object-cover" />
                         </div>
@@ -500,7 +500,7 @@ function AdminPage({ reports, onDismiss, pendingEvents, onApproveEvent, onReject
               )}
 
               <div className="flex justify-end pt-4 mt-4 border-t border-line-soft">
-                <button className="secondary-button inline-flex items-center justify-center gap-[7px] border border-line rounded-full px-4 py-[10px] bg-white text-text-2 text-sm font-semibold transition-all duration-150" onClick={() => setCarouselSelectorOpen(false)} type="button">关闭</button>
+                <button className="secondary-button inline-flex items-center justify-center gap-[7px] border border-line rounded-full px-4 py-[10px] bg-surface text-text-2 text-sm font-semibold transition-all duration-150" onClick={() => setCarouselSelectorOpen(false)} type="button">关闭</button>
               </div>
             </div>
           </div>

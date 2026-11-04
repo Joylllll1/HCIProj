@@ -7,7 +7,7 @@ import TimeAgo from './TimeAgo';
 import ConfirmLeaveDialog from './ConfirmLeaveDialog';
 import { getDisplayName } from '../../utils';
 import useCommentStore from '../../store/commentStore';
-import { fileToOptimizedDataUrl } from '../../utils/image';
+import ResponseInput from './ResponseInput';
 
 // ─── Stable store selectors ───
 const selectToggleReplyLike = (s) => s.toggleReplyLike;
@@ -16,7 +16,7 @@ function normalizeOwnerId(ownerUserId) {
   return typeof ownerUserId === 'object' ? ownerUserId?.toString() : ownerUserId;
 }
 
-function ReplyCard({ reply, postId, currentUserId, onReply, onDelete, onReport }) {
+function ReplyCard({ reply, postId, currentUserId, onReply, onDelete, onReport, onAuthorFilter, postOwnerId }) {
   const toggleReplyLike = useCommentStore(selectToggleReplyLike);
   const [showReportModal, setShowReportModal] = useState(false);
   const [showReplyInput, setShowReplyInput] = useState(false);
@@ -43,10 +43,10 @@ function ReplyCard({ reply, postId, currentUserId, onReply, onDelete, onReport }
     setTimeout(() => replyInputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 100);
   };
 
-  const handleReplySubmit = (content, image) => {
+  const handleReplySubmit = async (content, image) => {
     const commentId = reply.parentId;
     const replyToId = reply.id || reply._id;
-    onReply(commentId, content, image, replyToId);
+    await onReply(commentId, content, image, replyToId);
     setShowReplyInput(false);
   };
 
@@ -58,10 +58,10 @@ function ReplyCard({ reply, postId, currentUserId, onReply, onDelete, onReport }
         </div>
         <div className="reply-body flex-1 p-4 max-sm:p-3 rounded-md border border-line-soft bg-surface">
           {/* 被回复内容引用 */}
-          <div className="quoted-content p-2 mb-3 rounded-md bg-[#f5f5f5] border border-[#e0e0e0] text-text-2 text-sm">
+          <div className="quoted-content p-2 mb-3 rounded-md bg-surface-soft border border-line text-text-2 text-sm">
             <div>
               <strong className="text-text text-sm">{parentAuthorName}</strong>
-              <TimeAgo timeString={reply.parentTime} className="block mt-0.5 text-text-3 text-xs" />
+              <TimeAgo timeString={reply.parentTime} compact className="block mt-0.5 text-text-3 text-xs" />
             </div>
             <div className="mt-2">
               <ExpandableText
@@ -79,8 +79,9 @@ function ReplyCard({ reply, postId, currentUserId, onReply, onDelete, onReport }
           <div className="reply-meta flex items-center justify-between gap-[8px] mb-2">
             <div className="flex items-center gap-[8px]">
               <div>
-                <strong className="text-sm">{replyName}</strong>
-                <TimeAgo timeString={reply.createdAt} className="block mt-0.5 text-text-3 text-xs" />
+                <button type="button" className="comment-author" onClick={() => onAuthorFilter?.(reply.ownerUserId)} aria-label={`只看 ${replyName}`}>{replyName}</button>
+                {postOwnerId && reply.ownerUserId === postOwnerId && <span className="author-badge">洞主</span>}
+                <TimeAgo timeString={reply.createdAt} compact className="block mt-0.5 text-text-3 text-xs" />
               </div>
               {reply.official && <span className="pill blue text-[10px] px-[2px_6px]">官方</span>}
             </div>
@@ -135,9 +136,12 @@ function ReplyCard({ reply, postId, currentUserId, onReply, onDelete, onReport }
 
           {/* 回复输入框 - 显示在回复卡片正下方 */}
           {showReplyInput && (
-            <ReplyInput
-              ref={replyInputRef}
-              replyToName={replyName}
+            <ResponseInput
+              draftKey={`reply-${postId}-${reply.id || reply._id}`}
+              autoFocus
+              label={`回复 ${replyName}`}
+              placeholder={`回复 ${replyName}…`}
+              submitLabel="发送回复"
               onSubmit={handleReplySubmit}
               onCancel={() => setShowReplyInput(false)}
             />
@@ -170,108 +174,5 @@ function ReplyCard({ reply, postId, currentUserId, onReply, onDelete, onReport }
     </>
   );
 }
-
-// 回复输入框组件
-const ReplyInput = React.forwardRef(({ replyToName, onSubmit, onCancel }, ref) => {
-  const [text, setText] = useState('');
-  const [showEmoji, setShowEmoji] = useState(false);
-  const [image, setImage] = useState('');
-  const fileRef = useRef(null);
-
-  React.useEffect(() => {
-    ref.current?.focus();
-  }, [ref]);
-
-  const EMOJI_LIST = ['😊', '😂', '🥺', '😭', '❤️', '👍', '🎉', '🤔', '💪', '✨', '🙏', '😅', '🥰', '😢', '😤', '🤝', '💯', '🔥', '👀', '💕'];
-
-  const handleImageChange = (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    fileToOptimizedDataUrl(file)
-      .then((url) => {
-        setImage(url);
-      })
-      .catch(() => {});
-
-    e.target.value = '';
-  };
-
-  const handleSubmit = () => {
-    if (!text.trim() && !image) return;
-    onSubmit(text.trim(), image);
-    setText('');
-    setImage('');
-  };
-
-  return (
-    <div ref={ref} className="reply-input mt-3 p-[14px] max-sm:p-3 rounded-md border border-blue bg-blue-soft">
-      <div className="flex items-center justify-between mb-2">
-        <span className="text-sm text-blue font-semibold">回复 {replyToName}</span>
-        <button type="button" className="text-text-3 hover:text-text" onClick={onCancel}>取消</button>
-      </div>
-      <textarea
-        className="w-full min-h-[60px] border border-line-soft rounded-md p-2 bg-white outline-0 resize-y text-text"
-        placeholder={`回复 ${replyToName}...`}
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-      />
-      {image && (
-        <div className="comment-image-preview relative mt-2.5">
-          <img src={image} alt="preview" className="max-w-[200px] max-h-[150px] rounded-md object-cover" />
-          <button type="button" className="comment-image-remove absolute top-1.5 left-1.5 grid w-6 h-6 place-items-center px-0 py-0 border-0 rounded-full bg-black/60 text-white text-base cursor-pointer" onClick={() => setImage('')}>&times;</button>
-        </div>
-      )}
-      <div className="flex items-center justify-between gap-4 mt-2">
-        <div className="flex gap-2">
-          <button
-            type="button"
-            className="toolbar-btn grid w-8 h-8 place-items-center px-0 py-0 border-0 rounded-md bg-transparent text-text-3 cursor-pointer transition-colors duration-150 hover:bg-white hover:text-blue"
-            onClick={() => setShowEmoji(!showEmoji)}
-            aria-label="表情"
-          >
-            <Icon name="sentiment_satisfied" />
-          </button>
-          <button
-            type="button"
-            className="toolbar-btn grid w-8 h-8 place-items-center px-0 py-0 border-0 rounded-md bg-transparent text-text-3 cursor-pointer transition-colors duration-150 hover:bg-white hover:text-blue"
-            onClick={() => fileRef.current?.click()}
-            aria-label="图片"
-          >
-            <Icon name="image" />
-          </button>
-          <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handleImageChange} />
-        </div>
-        {showEmoji && (
-          <div className="emoji-picker absolute mt-8 flex flex-wrap gap-1 p-2.5 border border-line rounded-sm bg-white shadow-sm z-10">
-            {EMOJI_LIST.map((emoji) => (
-              <button
-                key={emoji}
-                className="emoji-item w-8 h-8 grid place-items-center px-0 py-0 border-0 rounded-md bg-transparent text-lg cursor-pointer transition-colors duration-150 hover:bg-surface-soft"
-                onClick={() => {
-                  setText((prev) => prev + emoji);
-                  setShowEmoji(false);
-                }}
-                type="button"
-              >
-                {emoji}
-              </button>
-            ))}
-          </div>
-        )}
-        <button
-          className="primary-button inline-flex items-center justify-center gap-[7px] border-0 rounded-full px-[18px] py-[10px] text-white bg-blue font-bold shadow-sm transition-all duration-150 hover:-translate-y-px hover:bg-blue-2 disabled:opacity-50 disabled:cursor-not-allowed"
-          onClick={handleSubmit}
-          type="button"
-          disabled={!text.trim() && !image}
-        >
-          发送回复
-        </button>
-      </div>
-    </div>
-  );
-});
-
-ReplyInput.displayName = 'ReplyInput';
 
 export default ReplyCard;

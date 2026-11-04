@@ -1,6 +1,10 @@
 import { create } from 'zustand';
 import * as notificationService from '../services/notificationService';
 
+let listRequestId = 0;
+let countRequestId = 0;
+let generation = 0;
+
 // Merge like notifications for the same post
 function mergeLikeNotifications(notifications) {
   const merged = [];
@@ -66,23 +70,25 @@ const useNotificationStore = create((set, get) => ({
   },
 
   fetchNotifications: async () => {
+    const requestId = ++listRequestId;
     set({ loading: true, error: null });
     try {
       const data = await notificationService.fetchNotifications();
       const notifications = data.notifications || [];
       const merged = mergeLikeNotifications(notifications);
-      set({ notifications: merged, loading: false });
+      if (requestId === listRequestId) set({ notifications: merged, loading: false });
       return merged;
     } catch (err) {
-      set({ error: err.message, loading: false });
+      if (requestId === listRequestId) set({ error: err.message, loading: false });
       return [];
     }
   },
 
   fetchUnreadCount: async () => {
+    const requestId = ++countRequestId;
     try {
       const data = await notificationService.fetchUnreadCount();
-      set({ unreadCount: data.count || 0 });
+      if (requestId === countRequestId) set({ unreadCount: data.count || 0 });
       return data.count || 0;
     } catch (err) {
       console.error('Failed to fetch unread count:', err);
@@ -91,12 +97,15 @@ const useNotificationStore = create((set, get) => ({
   },
 
   markAsRead: async (notificationId) => {
+    const owner = generation;
     try {
       // Optimistic update
       const { notifications } = get();
       const notification = notifications.find((n) => n._id === notificationId);
 
       if (notification && !notification.read) {
+        ++listRequestId;
+        ++countRequestId;
         // Handle merged likes
         if (notification._isMerged && notification._likeIds) {
           const unreadLikeCount = notification._unreadLikeCount || 0;
@@ -108,6 +117,7 @@ const useNotificationStore = create((set, get) => ({
                 : n
             ),
             unreadCount: Math.max(0, get().unreadCount - unreadLikeCount),
+            loading: false,
           });
           // Mark all on server
           await Promise.all(
@@ -119,11 +129,14 @@ const useNotificationStore = create((set, get) => ({
               n._id === notificationId ? { ...n, read: true } : n
             ),
             unreadCount: Math.max(0, get().unreadCount - 1),
+            loading: false,
           });
           await notificationService.markNotificationAsRead(notificationId);
         }
+        if (owner === generation) await get().refresh();
       }
     } catch (err) {
+      if (owner !== generation) return;
       console.error('Failed to mark as read:', err);
       // Revert on error by refetching
       get().fetchNotifications();
@@ -132,14 +145,20 @@ const useNotificationStore = create((set, get) => ({
   },
 
   markAllAsRead: async () => {
+    const owner = generation;
+    ++listRequestId;
+    ++countRequestId;
     try {
       // Optimistic update
       set({
-        notifications: get().notifications.map((n) => ({ ...n, read: true })),
+        notifications: get().notifications.map((n) => ({ ...n, read: true, _unreadLikeCount: 0 })),
         unreadCount: 0,
+        loading: false,
       });
       await notificationService.markAllNotificationsAsRead();
+      if (owner === generation) await get().refresh();
     } catch (err) {
+      if (owner !== generation) return;
       console.error('Failed to mark all as read:', err);
       // Revert on error
       get().fetchNotifications();
@@ -153,6 +172,9 @@ const useNotificationStore = create((set, get) => ({
   },
 
   reset: () => {
+    ++generation;
+    ++listRequestId;
+    ++countRequestId;
     set({
       notifications: [],
       unreadCount: 0,

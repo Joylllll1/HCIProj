@@ -29,7 +29,7 @@ export function EventDetailModal({ event, onClose }) {
 
   return (
     <div className="modal-overlay fixed inset-0 z-[150] grid place-items-center bg-black/40 animate-modal-fade-in" onClick={onClose}>
-      <div className="modal-content w-[min(600px,90vw)] max-h-[85vh] overflow-y-auto rounded-lg bg-white shadow-md animate-modal-scale-in" onClick={(e) => e.stopPropagation()}>
+      <div className="modal-content w-[min(600px,90vw)] max-h-[85vh] overflow-y-auto rounded-lg bg-surface shadow-md animate-modal-scale-in" onClick={(e) => e.stopPropagation()}>
         {event.image && (
           <img src={event.image} alt={event.title} className="w-full h-[260px] object-cover rounded-t-lg" />
         )}
@@ -85,7 +85,7 @@ export function RejectionModal({ onClose, onSubmit }) {
 
   return (
     <div className="modal-overlay fixed inset-0 z-[150] grid place-items-center bg-black/40 animate-modal-fade-in" onClick={onClose}>
-      <div className="modal-content w-[min(500px,90vw)] rounded-lg bg-white shadow-md animate-modal-scale-in" onClick={(e) => e.stopPropagation()}>
+      <div className="modal-content w-[min(500px,90vw)] rounded-lg bg-surface shadow-md animate-modal-scale-in" onClick={(e) => e.stopPropagation()}>
         <div className="p-6">
           <h2 className="text-2xl tracking-tight mb-2">拒绝活动</h2>
           <p className="text-text-2 text-sm mb-6">请选择拒绝理由，该反馈将发送给申请人。</p>
@@ -97,7 +97,7 @@ export function RejectionModal({ onClose, onSubmit }) {
                 className={`w-full text-left px-4 py-3 border rounded-md text-sm transition-colors duration-150 ${
                   selectedReason === reason
                     ? 'border-blue bg-blue-soft text-blue font-semibold'
-                    : 'border-line-soft bg-white text-text-2 hover:bg-surface-soft'
+                    : 'border-line-soft bg-surface text-text-2 hover:bg-surface-soft'
                 }`}
                 onClick={() => { setSelectedReason(reason); setCustomReason(''); }}
                 type="button"
@@ -109,7 +109,7 @@ export function RejectionModal({ onClose, onSubmit }) {
               className={`w-full text-left px-4 py-3 border rounded-md text-sm transition-colors duration-150 ${
                 selectedReason === 'other'
                   ? 'border-blue bg-blue-soft text-blue font-semibold'
-                  : 'border-line-soft bg-white text-text-2 hover:bg-surface-soft'
+                  : 'border-line-soft bg-surface text-text-2 hover:bg-surface-soft'
               }`}
               onClick={() => setSelectedReason('other')}
               type="button"
@@ -121,7 +121,7 @@ export function RejectionModal({ onClose, onSubmit }) {
           {selectedReason === 'other' && (
             <textarea
               autoFocus
-              className="w-full min-h-[80px] p-3 border border-line rounded-md bg-white text-text text-sm resize-y mb-4"
+              className="w-full min-h-[80px] p-3 border border-line rounded-md bg-surface text-text text-sm resize-y mb-4"
               placeholder="请输入拒绝理由..."
               value={customReason}
               onChange={(e) => setCustomReason(e.target.value)}
@@ -129,7 +129,7 @@ export function RejectionModal({ onClose, onSubmit }) {
           )}
 
           <div className="flex justify-end gap-3 pt-4 border-t border-line-soft">
-            <button className="secondary-button inline-flex items-center justify-center gap-[7px] border border-line rounded-full px-4 py-[10px] bg-white text-text-2 text-sm font-semibold transition-all duration-150" onClick={onClose} type="button">取消</button>
+            <button className="secondary-button inline-flex items-center justify-center gap-[7px] border border-line rounded-full px-4 py-[10px] bg-surface text-text-2 text-sm font-semibold transition-all duration-150" onClick={onClose} type="button">取消</button>
             <button className="primary-button inline-flex items-center justify-center gap-[7px] border-0 rounded-full px-[18px] py-[10px] text-white bg-blue font-bold shadow-sm transition-all duration-150 hover:-translate-y-px hover:bg-blue-2 disabled:opacity-50 disabled:cursor-not-allowed" onClick={handleSubmit} disabled={!canSubmit} type="button">确认拒绝</button>
           </div>
         </div>

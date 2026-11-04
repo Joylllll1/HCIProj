@@ -123,7 +123,8 @@ export async function fetchWithAuthRetry(path, options = {}) {
 
   try {
     await refreshSession();
-  } catch {
+  } catch (error) {
+    if (error.status !== 401) throw error;
     if (shouldRedirectOnAuthFailure(options)) {
       await handleAuthFailure();
     } else {

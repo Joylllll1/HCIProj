@@ -1,9 +1,18 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import ReactDOM from 'react-dom';
 import Icon from '../common/Icon';
+import ThemeToggle from '../common/ThemeToggle';
+import useDialogFocus from '../../hooks/useDialogFocus';
 import useNotificationStore from '../../store/notificationStore';
 import usePostStore from '../../store/postStore';
 import useUiStore from '../../store/uiStore';
+import { loadJSON, saveJSON } from '../../utils';
+
+const LOCAL_SEARCH_CONTEXTS = {
+  likes: { label: '搜索我的喜爱', placeholder: '搜索喜爱的帖子和评论...' },
+  bookmarks: { label: '搜索我的收藏', placeholder: '搜索收藏的帖子...' },
+  announcements: { label: '搜索校园公告', placeholder: '搜索校园活动...' },
+};
 
 function formatRelativeTime(date) {
   if (!date) return '';
@@ -21,41 +30,81 @@ function formatRelativeTime(date) {
 }
 
 function TopBar({ query, onQueryChange, onNavigate, onAIOpen }) {
+  const [inputQuery, setInputQuery] = useState(query);
+  const [history, setHistory] = useState(() => (Array.isArray(loadJSON('nju_search_history', [])) ? loadJSON('nju_search_history', []) : []).filter((item) => typeof item === 'string').slice(0, 8));
+  const [historyOpen, setHistoryOpen] = useState(false);
+  useEffect(() => setInputQuery(query), [query]);
   const [showNotifs, setShowNotifs] = useState(false);
   const [searchExpanded, setSearchExpanded] = useState(false);
   const [isMobile, setIsMobile] = useState(() => {
     if (typeof window === 'undefined') return false;
-    return window.innerWidth < 640;
+    return window.innerWidth < 681;
   });
 
   const searchContainerRef = useRef(null);
   const inputRef = useRef(null);
+  const notificationRef = useRef(null);
+  useDialogFocus(notificationRef, showNotifs, () => setShowNotifs(false));
+  useEffect(() => {
+    if (!showNotifs) return;
+    const body = document.body;
+    const previous = { overflow: body.style.overflow, paddingRight: body.style.paddingRight };
+    const scrollbar = window.innerWidth - document.documentElement.clientWidth;
+    if (scrollbar > 0) body.style.paddingRight = `${parseFloat(getComputedStyle(body).paddingRight || '0') + scrollbar}px`;
+    body.style.overflow = 'hidden';
+    return () => { body.style.overflow = previous.overflow; body.style.paddingRight = previous.paddingRight; };
+  }, [showNotifs]);
 
   const activePage = useUiStore((s) => s.activePage);
   const requestFeedScroll = useUiStore((s) => s.requestFeedScroll);
+  const localSearchContext = LOCAL_SEARCH_CONTEXTS[activePage];
 
   // Track viewport width for mobile detection
   useEffect(() => {
-    const onResize = () => setIsMobile(window.innerWidth < 640);
+    const onResize = () => setIsMobile(window.innerWidth < 681);
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
-  // Collapse search and optionally trigger scroll when confirming with content
-  const collapseSearch = useCallback((isConfirm = false) => {
+  const confirmSearch = useCallback((value = inputQuery) => {
+    const next = value.trim();
+    onQueryChange(next);
+    setInputQuery(next);
+    if (next) setHistory((items) => {
+      const updated = [next, ...items.filter((item) => item !== next)].slice(0, 8);
+      saveJSON('nju_search_history', updated);
+      return updated;
+    });
+    setHistoryOpen(false);
     setSearchExpanded(false);
-    if (isConfirm && query.trim() && activePage === 'home') {
+    inputRef.current?.blur();
+    if (!localSearchContext) {
+      if (activePage !== 'home') onNavigate('home');
       requestFeedScroll();
     }
-  }, [query, activePage, requestFeedScroll]);
+  }, [inputQuery, onQueryChange, activePage, localSearchContext, onNavigate, requestFeedScroll]);
+  const collapseSearch = useCallback(() => { setSearchExpanded(false); setHistoryOpen(false); }, []);
+  useEffect(() => {
+    const shortcut = (event) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        if (isMobile) setSearchExpanded(true);
+        else inputRef.current?.focus();
+      }
+      if (event.key === 'Escape') { setHistoryOpen(false); inputRef.current?.blur(); }
+    };
+    document.addEventListener('keydown', shortcut);
+    return () => document.removeEventListener('keydown', shortcut);
+  }, [isMobile]);
 
   // Close dropdown & expanded search when clicking outside
   useEffect(() => {
     const handleClickOutside = (event) => {
+      if (historyOpen && !event.target.closest('.search-box') && !event.target.closest('.search-history')) setHistoryOpen(false);
       if (searchExpanded && searchContainerRef.current
           && !searchContainerRef.current.contains(event.target)
-          && !event.target.closest('.search-action-btn')) {
-        collapseSearch(!!query.trim());
+          && !event.target.closest('.search-action-btn') && !event.target.closest('.search-history')) {
+        collapseSearch();
       }
     };
 
@@ -65,23 +114,19 @@ function TopBar({ query, onQueryChange, onNavigate, onAIOpen }) {
       document.removeEventListener('mousedown', handleClickOutside);
       document.removeEventListener('touchend', handleClickOutside);
     };
-  }, [searchExpanded, collapseSearch, query]);
+  }, [searchExpanded, collapseSearch, historyOpen]);
 
   // ESC key to collapse search
   useEffect(() => {
-    if (!searchExpanded && !showNotifs) return;
+    if (!searchExpanded) return;
     const onKeyDown = (e) => {
       if (e.key === 'Escape') {
-        if (showNotifs) {
-          setShowNotifs(false);
-        } else {
-          collapseSearch(false);
-        }
+        collapseSearch();
       }
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [searchExpanded, showNotifs, collapseSearch]);
+  }, [searchExpanded, collapseSearch]);
 
   // Focus input after expand animation
   useEffect(() => {
@@ -94,6 +139,8 @@ function TopBar({ query, onQueryChange, onNavigate, onAIOpen }) {
   // Get notification state from store
   const notifications = useNotificationStore((s) => s.notifications);
   const unreadCount = useNotificationStore((s) => s.unreadCount);
+  const notificationsLoading = useNotificationStore((s) => s.loading);
+  const notificationsError = useNotificationStore((s) => s.error);
   const markAsRead = useNotificationStore((s) => s.markAsRead);
   const markAllAsRead = useNotificationStore((s) => s.markAllAsRead);
   const setSelectedPost = usePostStore((s) => s.setSelectedPost);
@@ -115,6 +162,7 @@ function TopBar({ query, onQueryChange, onNavigate, onAIOpen }) {
   // Handle mark all as read
   const handleMarkAllRead = () => {
     markAllAsRead();
+    notificationRef.current?.querySelector('.notif-close-btn')?.focus();
   };
 
   // Expand search on mobile
@@ -127,6 +175,7 @@ function TopBar({ query, onQueryChange, onNavigate, onAIOpen }) {
   // Clear search input
   const handleClearSearch = () => {
     onQueryChange('');
+    setInputQuery('');
     if (inputRef.current) {
       inputRef.current.focus();
     }
@@ -134,77 +183,39 @@ function TopBar({ query, onQueryChange, onNavigate, onAIOpen }) {
 
   // Action button handler (取消/确认)
   const handleSearchAction = () => {
-    collapseSearch(!!query.trim());
+    if (inputQuery.trim()) confirmSearch();
+    else collapseSearch();
   };
 
-  const mobilePlaceholder = '搜索帖子、话题...';
-  const desktopPlaceholder = '搜索帖子、话题或匿名 ID...';
+  const mobilePlaceholder = localSearchContext?.placeholder || '搜索帖子、话题...';
+  const desktopPlaceholder = localSearchContext?.placeholder || '搜索树洞或关键词 · ⌘ / Ctrl K';
+  const searchLabel = localSearchContext?.label || '搜索树洞';
 
   const isExpanded = isMobile && searchExpanded;
   const notificationModal = showNotifs
     ? ReactDOM.createPortal(
-      <div
-        className="notif-modal-overlay fixed inset-0 z-[180] grid place-items-start justify-items-center bg-[rgba(76,54,61,0.24)] px-4 pt-[92px] backdrop-blur-[5px] animate-modal-fade-in max-sm:place-items-end max-sm:px-3 max-sm:pb-[calc(14px+env(safe-area-inset-bottom,0px))] max-sm:pt-0"
-        onClick={() => setShowNotifs(false)}
-      >
-        <div
-          className="notif-modal-panel w-[min(420px,100%)] max-h-[min(620px,calc(100vh-130px))] overflow-hidden rounded-[26px] border border-line bg-surface shadow-glass animate-modal-scale-in max-sm:max-h-[78vh] max-sm:rounded-[24px]"
-          onClick={(event) => event.stopPropagation()}
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="notification-modal-title"
-        >
-          <div className="notif-header">
-            <strong id="notification-modal-title">通知</strong>
-            <div>
-              {unreadCount > 0 && (
-                <button
-                  type="button"
-                  className="notif-mark-read"
-                  onClick={handleMarkAllRead}
-                >
-                  全部已读
-                </button>
-              )}
-              <button
-                type="button"
-                className="notif-close-btn grid w-7 h-7 place-items-center border border-line rounded-full bg-white text-text-3 text-sm cursor-pointer transition-colors duration-150 hover:text-text hover:border-text-3"
-                onClick={() => setShowNotifs(false)}
-                aria-label="关闭通知"
-              >
-                ×
-              </button>
+      <div className="notif-modal-overlay" onClick={() => setShowNotifs(false)}>
+        <section ref={notificationRef} className="notif-modal-panel" onClick={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="notification-modal-title">
+          <header className="notif-header">
+            <div className="notif-heading"><h2 id="notification-modal-title">通知</h2><span>{unreadCount > 0 ? `${unreadCount} 条未读` : '回复与互动消息'}</span></div>
+            <div className="notif-actions">
+              {unreadCount > 0 && <button type="button" className="notif-mark-read" onClick={handleMarkAllRead}><Icon name="check" />全部已读</button>}
+              <button type="button" className="notif-close-btn" data-dialog-focus onClick={() => setShowNotifs(false)} aria-label="关闭通知"><Icon name="close" /></button>
             </div>
+          </header>
+          {notificationsError && <div className="notif-error" role="alert"><span>{notificationsError}</span><button type="button" onClick={() => useNotificationStore.getState().fetchNotifications()}>重试</button></div>}
+          <div className="notif-modal-list" aria-busy={notificationsLoading}>
+            {notificationsLoading && !notifications.length ? <p className="notif-loading" role="status">正在加载通知…</p> : !notifications.length && !notificationsError ? (
+              <div className="notif-empty"><Icon name="notifications" /><p>暂时没有通知</p><span>新的回复、点赞和活动消息会显示在这里。</span></div>
+            ) : notifications.map(n => (
+              <button type="button" className={`notif-item ${n.read ? '' : 'unread'}`} key={n._id} onClick={() => handleNotifClick(n)}>
+                <span className={`notif-dot ${n.read ? 'is-read' : ''}`} aria-hidden="true" />
+                <span className="notif-copy"><strong>{n.title}</strong><span className="notif-content">{n.content}</span><time dateTime={n.createdAt}>{formatRelativeTime(n.createdAt)}</time></span>
+                <Icon name="chevron_right" />
+              </button>
+            ))}
           </div>
-          <div className="notif-modal-list max-h-[520px] overflow-y-auto max-sm:max-h-[calc(78vh-58px)]">
-            {notifications.length === 0 ? (
-              <div className="notif-empty">暂无通知</div>
-            ) : (
-              notifications.map((n) => (
-                <div
-                  className={`notif-item cursor-pointer ${n.read ? '' : 'unread'}`}
-                  key={n._id}
-                  onClick={() => handleNotifClick(n)}
-                  role="button"
-                  tabIndex={0}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter' || event.key === ' ') {
-                      event.preventDefault();
-                      handleNotifClick(n);
-                    }
-                  }}
-                >
-                  <span className={`notif-dot ${n.read ? 'opacity-0' : 'opacity-1'}`} />
-                  <div className="min-w-0 flex-1">
-                    <p className="m-0 text-sm leading-normal text-text truncate">{n.title}</p>
-                    <p className="m-0 text-sm leading-normal text-text-2 truncate">{n.content}</p>
-                    <small className="block mt-1 text-text-3 text-xs">{formatRelativeTime(n.createdAt)}</small>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
+        </section>
       </div>,
       document.body
     )
@@ -213,22 +224,23 @@ function TopBar({ query, onQueryChange, onNavigate, onAIOpen }) {
   return (
     <>
       <header
-        className={`topbar sticky top-0 z-20 flex items-center justify-between gap-5 h-[60px] px-7 border-b border-line bg-white/82 backdrop-blur-xs max-sm:h-[48px] max-sm:px-3 max-sm:gap-2 ${isExpanded ? 'topbar-search-expanded' : ''}`}
+        className={`topbar sticky top-0 z-20 flex items-center justify-between gap-5 h-[60px] px-7 border-b border-line bg-surface/82 backdrop-blur-xs max-sm:h-[48px] max-sm:px-3 max-sm:gap-2 ${isExpanded ? 'topbar-search-expanded' : ''}`}
         style={{ paddingTop: 'env(safe-area-inset-top, 0px)' }}
       >
         {isExpanded ? (
           /* ── Mobile expanded search layout ── */
-          <div ref={searchContainerRef} className="search-box">
+          <form ref={searchContainerRef} className="search-box" role="search" onSubmit={(event) => { event.preventDefault(); confirmSearch(); }}>
             <Icon name="search" />
             <input
               ref={inputRef}
+              onFocus={() => setHistoryOpen(true)}
               className="w-full border-0 outline-0 text-text bg-transparent text-sm"
-              aria-label="搜索树洞"
-              onChange={(event) => onQueryChange(event.target.value)}
+              aria-label={searchLabel}
+              onChange={(event) => setInputQuery(event.target.value)}
               placeholder={desktopPlaceholder}
-              value={query}
+              value={inputQuery}
             />
-            {query && (
+            {inputQuery && (
               <button
                 className="search-clear-btn"
                 onClick={handleClearSearch}
@@ -238,29 +250,34 @@ function TopBar({ query, onQueryChange, onNavigate, onAIOpen }) {
                 ×
               </button>
             )}
-          </div>
+          </form>
         ) : (
           /* ── Normal layout ── */
           <>
-            <div className="search-box">
+            <button className="mobile-brand" type="button" aria-label="南大树洞首页" onClick={() => onNavigate('home')}><Icon name="park" /></button>
+            <form className="search-box" role="search" onSubmit={(event) => { event.preventDefault(); confirmSearch(); }}>
               <Icon name="search" />
               <input
+                ref={inputRef}
                 className="w-full border-0 outline-0 text-text bg-transparent text-sm"
-                aria-label="搜索树洞"
-                onFocus={handleSearchFocus}
-                onChange={(event) => onQueryChange(event.target.value)}
+                aria-label={searchLabel}
+                onFocus={() => { handleSearchFocus(); setHistoryOpen(true); }}
+                onChange={(event) => setInputQuery(event.target.value)}
                 placeholder={isMobile ? mobilePlaceholder : desktopPlaceholder}
-                value={query}
+                value={inputQuery}
               />
-            </div>
+              {inputQuery && <button className="search-clear-btn" onClick={handleClearSearch} type="button" aria-label="清除搜索">×</button>}
+              <button className="search-submit" type="submit">搜索</button>
+            </form>
             <div className="topbar-actions flex items-center gap-2.5 max-sm:gap-1.5">
-              <button className="ai-topbar-btn flex items-center gap-1.5 h-[38px] px-4 border-0 rounded-full text-white bg-gradient-to-br from-blue to-[#6c5ce7] text-[13px] font-bold shadow-sm transition-all duration-150 hover:-translate-y-px hover:shadow-md" onClick={onAIOpen} type="button" aria-label="树洞 AI">
-                <Icon name="smart_toy" filled />
-                <span>AI</span>
+              <ThemeToggle />
+              <button className="ai-topbar-btn" onClick={onAIOpen} type="button" aria-label="树洞 AI">
+                <Icon name="smart_toy" />
+                <span>树洞 AI</span>
               </button>
               <div className="notif-wrapper relative">
                 <button
-                  className={`icon-button grid w-[38px] h-[38px] place-items-center rounded-full border border-line bg-white text-text-2 shadow-xs transition-all duration-150 hover:text-blue hover:border-[#b0c4de] hover:-translate-y-px ${unreadCount > 0 ? 'notification' : ''}`}
+                  className="icon-button notification-trigger"
                   type="button"
                   aria-label="通知"
                   aria-haspopup="dialog"
@@ -269,13 +286,13 @@ function TopBar({ query, onQueryChange, onNavigate, onAIOpen }) {
                 >
                   <Icon name="notifications" />
                   {unreadCount > 0 && (
-                    <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red text-white text-xs font-bold flex items-center justify-center">
+                    <span className="notification-badge">
                       {unreadCount > 99 ? '99+' : unreadCount}
                     </span>
                   )}
                 </button>
               </div>
-              <button className="icon-button max-sm:hidden grid w-[38px] h-[38px] place-items-center rounded-full border border-line bg-white text-text-2 shadow-xs transition-all duration-150 hover:text-blue hover:border-[#b0c4de] hover:-translate-y-px" type="button" aria-label="个人设置" onClick={() => onNavigate('settings')}>
+              <button className="icon-button max-sm:hidden grid w-[38px] h-[38px] place-items-center rounded-full border border-line bg-surface text-text-2 shadow-xs transition-all duration-150 hover:text-blue hover:border-[#b0c4de] hover:-translate-y-px" type="button" aria-label="个人设置" onClick={() => onNavigate('settings')}>
                 <Icon name="person" />
               </button>
             </div>
@@ -289,9 +306,13 @@ function TopBar({ query, onQueryChange, onNavigate, onAIOpen }) {
             onClick={handleSearchAction}
             type="button"
           >
-            {query.trim() ? '确认' : '取消'}
+            {inputQuery.trim() ? '搜索' : '取消'}
           </button>
         )}
+        {historyOpen && history.length > 0 && <div className="search-history" aria-label="最近搜索">
+          <div><span>最近搜索</span><button type="button" onClick={() => { setHistory([]); saveJSON('nju_search_history', []); }}>清空记录</button><button type="button" onClick={() => setHistoryOpen(false)}>关闭</button></div>
+          {history.map((item) => <button type="button" key={item} onClick={() => confirmSearch(item)}><Icon name="schedule" />{item}</button>)}
+        </div>}
       </header>
       {notificationModal}
     </>

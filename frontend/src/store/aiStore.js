@@ -24,6 +24,11 @@ const EMPTY_AI_PERSONA = {
 
 const AI_PERSONA_FIELDS = Object.keys(EMPTY_AI_PERSONA);
 
+export function findRegenerableAssistantIndex(messages) {
+  return messages.findLastIndex((message) => message.role === 'assistant'
+    && (message.status === undefined || message.status === 'complete'));
+}
+
 function withPersonaDefaults(persona = {}) {
   return {
     ...DEFAULT_AI_PERSONA,
@@ -159,13 +164,189 @@ function createRequestId() {
   return `ai-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+let sessionSwitchGeneration = 0;
+let accountGeneration = 0;
+
+function updateSessionMessages(set, sessionId, updateMessages) {
+  set((state) => {
+    const isCurrentSession = (state.currentSession?._id || null) === (sessionId || null);
+    const cachedMessages = sessionId
+      ? state.messagesBySession[sessionId] || (isCurrentSession ? state.messages : [])
+      : state.messages;
+    const messages = updateMessages(cachedMessages);
+    const messagesBySession = sessionId
+      ? { ...state.messagesBySession, [sessionId]: messages }
+      : state.messagesBySession;
+    const sessionMessageRevisions = sessionId
+      ? {
+        ...state.sessionMessageRevisions,
+        [sessionId]: (state.sessionMessageRevisions[sessionId] || 0) + 1,
+      }
+      : state.sessionMessageRevisions;
+
+    return {
+      messagesBySession,
+      sessionMessageRevisions,
+      ...(isCurrentSession ? { messages } : {}),
+    };
+  });
+}
+
+function updateSessionError(state, sessionId, error) {
+  if (!sessionId) return { error };
+  return {
+    sessionErrors: { ...state.sessionErrors, [sessionId]: error },
+    ...(state.currentSession?._id === sessionId ? { error } : {}),
+  };
+}
+
+function mergeLocalFallbackMessages(serverMessages, cachedMessages) {
+  const mergedMessages = [...serverMessages];
+
+  for (const localMessage of cachedMessages) {
+    const isTemporaryMessage = String(localMessage._id).startsWith('temp-');
+    const isLocalFallback = localMessage.localFallback === true;
+    if (!isTemporaryMessage && !isLocalFallback) continue;
+
+    const isPresentOnServer = mergedMessages.some((serverMessage) => (
+      (localMessage._id && serverMessage._id === localMessage._id)
+      || (localMessage.turnId !== undefined && localMessage.turnId !== null
+        && serverMessage.turnId === localMessage.turnId
+        && serverMessage.role === localMessage.role)
+    ));
+    if (isPresentOnServer) continue;
+
+    mergedMessages.push(localMessage);
+  }
+
+  return mergedMessages;
+}
+
+function preserveInterruptedTurn(messages, { requestId, userContent, partialContent, createdAt }) {
+  const nextMessages = [...messages];
+  let userMessageIndex = nextMessages.findIndex((message) => message.turnId === requestId && message.role === 'user');
+
+  if (userMessageIndex < 0) {
+    userMessageIndex = nextMessages.findIndex((message) => message._id === `temp-${requestId}`);
+  }
+  if (userMessageIndex < 0 && nextMessages.at(-1)?.role === 'user' && nextMessages.at(-1)?.content === userContent) {
+    userMessageIndex = nextMessages.length - 1;
+  }
+
+  if (userMessageIndex < 0) {
+    userMessageIndex = nextMessages.length;
+    nextMessages.push({
+      _id: `temp-${requestId}`,
+      turnId: requestId,
+      role: 'user',
+      content: userContent,
+      createdAt,
+      status: 'interrupted',
+      localFallback: true,
+    });
+  } else if (nextMessages[userMessageIndex].status !== 'complete') {
+    nextMessages[userMessageIndex] = { ...nextMessages[userMessageIndex], status: 'interrupted', localFallback: true };
+  }
+
+  const assistantAfterQuestion = nextMessages.findIndex((message, index) => (
+    index > userMessageIndex && message.role === 'assistant'
+  ));
+  if (assistantAfterQuestion >= 0) {
+    nextMessages[assistantAfterQuestion] = {
+      ...nextMessages[assistantAfterQuestion],
+      content: partialContent || nextMessages[assistantAfterQuestion].content,
+      status: 'interrupted',
+      localFallback: true,
+    };
+  } else if (partialContent && !nextMessages.some((message) => message.turnId === requestId && message.role === 'assistant')) {
+    nextMessages.push({
+      _id: `temp-assistant-${requestId}`,
+      turnId: requestId,
+      role: 'assistant',
+      content: partialContent,
+      createdAt,
+      status: 'interrupted',
+      localFallback: true,
+    });
+  }
+
+  return nextMessages;
+}
+
+function preserveCompletedTurn(messages, { requestId, userContent, answer, createdAt }) {
+  const nextMessages = [...messages];
+  let userMessageIndex = nextMessages.findIndex((message) => message.turnId === requestId && message.role === 'user');
+
+  if (userMessageIndex < 0) {
+    userMessageIndex = nextMessages.findIndex((message) => message._id === `temp-${requestId}`);
+  }
+
+  if (userMessageIndex < 0) {
+    nextMessages.push({
+      _id: `temp-${requestId}`,
+      turnId: requestId,
+      role: 'user',
+      content: userContent,
+      createdAt,
+      status: 'complete',
+      localFallback: true,
+    });
+  } else {
+    nextMessages[userMessageIndex] = { ...nextMessages[userMessageIndex], status: 'complete' };
+  }
+
+  if (answer && !nextMessages.some((message) => message.turnId === requestId && message.role === 'assistant')) {
+    nextMessages.push({
+      _id: `temp-assistant-${requestId}`,
+      turnId: requestId,
+      role: 'assistant',
+      content: answer,
+      createdAt,
+      status: 'complete',
+      localFallback: true,
+    });
+  }
+
+  return nextMessages;
+}
+
+function preserveRegeneratedAnswer(messages, content, requestId, createdAt) {
+  if (!content) return messages;
+  const nextMessages = [...messages];
+  const assistantIndex = findRegenerableAssistantIndex(nextMessages);
+  if (assistantIndex >= 0) {
+    nextMessages[assistantIndex] = {
+      ...nextMessages[assistantIndex],
+      content,
+      status: 'complete',
+      turnId: requestId,
+      localFallback: true,
+    };
+  } else {
+    nextMessages.push({
+      _id: `temp-assistant-${requestId}`,
+      role: 'assistant',
+      turnId: requestId,
+      content,
+      createdAt,
+      status: 'complete',
+      localFallback: true,
+    });
+  }
+  return nextMessages;
+}
+
 const useAIStore = create((set, get) => ({
   // State
   sessions: [],
   currentSession: null,
   messages: [],
+  messagesBySession: {},
+  sessionMessageRevisions: {},
+  sessionErrors: {},
   showSessionList: false,
   isLoading: false,
+  isSessionSwitching: false,
   isPersonaViewOpen: false,
   isPersonaLoading: false,
   isPersonaSaving: false,
@@ -179,213 +360,378 @@ const useAIStore = create((set, get) => ({
   personaDraft: { ...EMPTY_AI_PERSONA },
   activeRequestController: null,
   activeRequestId: null,
+  activeRequestSessionId: null,
   toolStatus: null,
   streamingContent: '',
   error: null,
 
   // Actions
   fetchSessions: async () => {
+    const generation = accountGeneration;
     try {
       const sessions = await aiService.getSessions();
+      if (generation !== accountGeneration) return get().sessions;
       set({ sessions });
       return sessions;
     } catch (err) {
-      set({ error: err.message });
+      if (generation === accountGeneration) set({ error: err.message });
       throw err;
     }
   },
 
   createSession: async () => {
+    if (get().isLoading || get().isSessionSwitching) return null;
+    const account = accountGeneration;
+    const generation = ++sessionSwitchGeneration;
+    set({ isSessionSwitching: true });
     try {
       const session = await aiService.createSession();
+      if (generation !== sessionSwitchGeneration || account !== accountGeneration) return null;
       const { sessions } = get();
       set({
         sessions: [session, ...sessions],
         currentSession: session,
         messages: [],
+        messagesBySession: { ...get().messagesBySession, [session._id]: [] },
+        sessionMessageRevisions: { ...get().sessionMessageRevisions, [session._id]: 0 },
+        error: null,
         showSessionList: false,
         sessionPersona: session.aiPersona || {},
         effectivePersona: withPersonaDefaults(session.effectivePersona),
+        isSessionSwitching: false,
       });
       return session;
     } catch (err) {
-      set({ error: err.message });
+      if (generation === sessionSwitchGeneration && account === accountGeneration) set({ error: err.message, isSessionSwitching: false });
       throw err;
+    } finally {
+      if (generation === sessionSwitchGeneration && get().isSessionSwitching) {
+        set({ isSessionSwitching: false });
+      }
     }
   },
 
   switchSession: async (sessionId) => {
+    if (!sessionId) return false;
+    const account = accountGeneration;
+    const generation = ++sessionSwitchGeneration;
+    const initialState = get();
+    const selectedSession = initialState.sessions.find((item) => item._id === sessionId)
+      || (initialState.currentSession?._id === sessionId ? initialState.currentSession : { _id: sessionId, title: '会话' });
+    const cachedMessages = initialState.messagesBySession[sessionId]
+      || (initialState.currentSession?._id === sessionId ? initialState.messages : []);
+    const revisionAtStart = initialState.sessionMessageRevisions[sessionId] || 0;
+
+    // Switch the visible session immediately so the previous conversation and its
+    // stream can never remain on screen while the requested history is loading.
+    set({
+      currentSession: selectedSession,
+      messages: cachedMessages,
+      showSessionList: false,
+      isSessionSwitching: true,
+      sessionPersona: selectedSession.aiPersona || {},
+      effectivePersona: withPersonaDefaults(selectedSession.effectivePersona),
+      error: initialState.sessionErrors[sessionId] || null,
+    });
     try {
       const { session, messages } = await aiService.getSession(sessionId);
-      set({
-        currentSession: session,
-        messages,
-        showSessionList: false,
-        sessionPersona: session.aiPersona || {},
-        effectivePersona: withPersonaDefaults(session.effectivePersona),
+      if (generation !== sessionSwitchGeneration || account !== accountGeneration) return false;
+      set((state) => {
+        if (state.currentSession?._id !== sessionId) return { isSessionSwitching: false };
+        const hasNewerLocalMessages = (state.sessionMessageRevisions[sessionId] || 0) !== revisionAtStart;
+        const activeRequestOwnsSession = state.isLoading && state.activeRequestSessionId === sessionId;
+        const cachedMessagesForSession = state.messagesBySession[sessionId] || state.messages;
+        const nextMessages = hasNewerLocalMessages || activeRequestOwnsSession
+          ? cachedMessagesForSession
+          : mergeLocalFallbackMessages(messages, cachedMessagesForSession);
+        return {
+          currentSession: session,
+          messages: nextMessages,
+          messagesBySession: { ...state.messagesBySession, [sessionId]: nextMessages },
+          sessionMessageRevisions: {
+            ...state.sessionMessageRevisions,
+            [sessionId]: hasNewerLocalMessages || activeRequestOwnsSession
+              ? state.sessionMessageRevisions[sessionId] || 0
+              : (state.sessionMessageRevisions[sessionId] || 0) + 1,
+          },
+          showSessionList: false,
+          sessionPersona: session.aiPersona || {},
+          effectivePersona: withPersonaDefaults(session.effectivePersona),
+          isSessionSwitching: false,
+          error: state.sessionErrors[sessionId] || null,
+        };
       });
+      return true;
     } catch (err) {
-      set({ error: err.message });
+      if (generation === sessionSwitchGeneration && account === accountGeneration) {
+        set((state) => state.currentSession?._id === sessionId
+          ? { error: err.message, isSessionSwitching: false }
+          : { isSessionSwitching: false });
+      }
+      return false;
+    } finally {
+      if (generation === sessionSwitchGeneration && account === accountGeneration && get().isSessionSwitching) {
+        set({ isSessionSwitching: false });
+      }
     }
   },
 
   deleteSession: async (sessionId) => {
+    if (get().isLoading || get().isSessionSwitching) return false;
+    const account = accountGeneration;
+    const generation = ++sessionSwitchGeneration;
+    set({ isSessionSwitching: true });
     try {
       await aiService.deleteSession(sessionId);
+      if (generation !== sessionSwitchGeneration || account !== accountGeneration) return false;
       const { sessions, currentSession } = get();
       const newSessions = sessions.filter(s => s._id !== sessionId);
-      set({ sessions: newSessions });
+      const deletingCurrent = currentSession?._id === sessionId;
+      set({
+        sessions: newSessions,
+        messagesBySession: Object.fromEntries(Object.entries(get().messagesBySession).filter(([id]) => id !== sessionId)),
+        sessionMessageRevisions: Object.fromEntries(Object.entries(get().sessionMessageRevisions).filter(([id]) => id !== sessionId)),
+        sessionErrors: Object.fromEntries(Object.entries(get().sessionErrors).filter(([id]) => id !== sessionId)),
+        ...(deletingCurrent ? { currentSession: null, messages: [] } : {}),
+        isSessionSwitching: false,
+      });
 
-      if (currentSession?._id === sessionId) {
+      if (deletingCurrent) {
         if (newSessions.length > 0) {
           await get().switchSession(newSessions[0]._id);
         } else {
           await get().createSession();
         }
       }
+      return true;
     } catch (err) {
-      set({ error: err.message });
+      if (generation === sessionSwitchGeneration && account === accountGeneration) set({ error: err.message, isSessionSwitching: false });
+      return false;
+    } finally {
+      if (generation === sessionSwitchGeneration && get().isSessionSwitching) {
+        set({ isSessionSwitching: false });
+      }
     }
   },
 
   sendMessage: async (content) => {
-    const { currentSession, messages } = get();
-    const controller = new AbortController();
-    const requestId = createRequestId();
-    const context = buildCurrentChatContext();
+    const state = get();
+    if (state.isLoading || state.isSessionSwitching) return false;
 
+    const { currentSession, messages } = state;
+    const requestId = createRequestId();
+    const requestAccount = accountGeneration;
+    const controller = new AbortController();
+    const context = buildCurrentChatContext();
+    let boundSessionId = currentSession?._id || null;
+    const createdAt = new Date().toISOString();
     const tempUserMessage = {
-      _id: 'temp-' + Date.now(), role: 'user', content,
-      createdAt: new Date().toISOString(),
+      _id: `temp-${requestId}`,
+      turnId: requestId,
+      role: 'user',
+      content,
+      createdAt,
+      status: 'pending',
+    };
+    let requestMessages = [...messages, tempUserMessage];
+    const ownsRequest = () => {
+      const current = get();
+      return requestAccount === accountGeneration && current.activeRequestId === requestId;
     };
 
-    set({
-      messages: [...messages, tempUserMessage],
-      isLoading: true, isStopping: false, streamingContent: '',
-      toolStatus: null, activeRequestController: controller, activeRequestId: requestId,
+    set((latest) => {
+      const isCurrentOrigin = (latest.currentSession?._id || null) === (boundSessionId || null);
+      const messagesBySession = boundSessionId
+        ? { ...latest.messagesBySession, [boundSessionId]: requestMessages }
+        : latest.messagesBySession;
+      const sessionMessageRevisions = boundSessionId
+        ? {
+          ...latest.sessionMessageRevisions,
+          [boundSessionId]: (latest.sessionMessageRevisions[boundSessionId] || 0) + 1,
+        }
+        : latest.sessionMessageRevisions;
+      const sessionErrors = boundSessionId
+        ? { ...latest.sessionErrors, [boundSessionId]: null }
+        : latest.sessionErrors;
+
+      return {
+        ...(isCurrentOrigin ? { messages: requestMessages } : {}),
+        messagesBySession,
+        sessionMessageRevisions,
+        sessionErrors,
+        isLoading: true,
+        isStopping: false,
+        streamingContent: '',
+        toolStatus: null,
+        activeRequestController: controller,
+        activeRequestId: requestId,
+        activeRequestSessionId: boundSessionId,
+        error: null,
+      };
     });
 
     try {
-      await aiService.sendMessageStream(currentSession?._id, content, {
+      await aiService.sendMessageStream(boundSessionId, content, {
         signal: controller.signal,
         context,
         requestId,
         onStart: (sessionId) => {
-          set((state) => ({
-            currentSession: state.currentSession?._id === sessionId
-              ? state.currentSession
-              : {
-                  ...(state.currentSession || {}),
+          if (!ownsRequest() || (boundSessionId && boundSessionId !== sessionId)) return;
+          const initialSessionId = boundSessionId;
+          boundSessionId = sessionId;
+          set((latest) => {
+            if (latest.activeRequestId !== requestId) return latest;
+            const priorMessages = initialSessionId
+              ? latest.messagesBySession[initialSessionId] || requestMessages
+              : requestMessages;
+            requestMessages = priorMessages;
+            const isCurrentOrigin = !latest.currentSession?._id || latest.currentSession._id === initialSessionId;
+            return {
+              currentSession: isCurrentOrigin
+                ? {
+                  ...(latest.currentSession || {}),
                   _id: sessionId,
-                  title: state.currentSession?.title || '新会话',
-                },
-          }));
+                  title: latest.currentSession?.title || '新会话',
+                }
+                : latest.currentSession,
+              ...(isCurrentOrigin ? { messages: priorMessages } : {}),
+              messagesBySession: { ...latest.messagesBySession, [sessionId]: priorMessages },
+              sessionMessageRevisions: {
+                ...latest.sessionMessageRevisions,
+                [sessionId]: (latest.sessionMessageRevisions[sessionId] || 0) + 1,
+              },
+              activeRequestSessionId: sessionId,
+            };
+          });
         },
         onToolCall: (tool) => {
-          set({ toolStatus: `正在调用 ${tool}...` });
+          if (ownsRequest()) set({ toolStatus: `正在调用 ${tool}...` });
         },
         onToolResult: () => {
-          set({ toolStatus: null });
+          if (ownsRequest()) set({ toolStatus: null });
         },
         onToken: (token) => {
-          set((state) => ({ streamingContent: state.streamingContent + token }));
+          if (ownsRequest()) set((latest) => ({ streamingContent: latest.streamingContent + token }));
         },
         onDone: async () => {
-          await get().syncCurrentSessionAfterStream();
-          set({ streamingContent: '', toolStatus: null, isLoading: false, activeRequestController: null, activeRequestId: null });
+          if (!ownsRequest()) return;
+          const answer = get().streamingContent;
+          const synced = await get().syncCurrentSessionAfterStream(boundSessionId, requestId);
+          if (!synced && requestAccount === accountGeneration && !get().activeRequestId) {
+            updateSessionMessages(set, boundSessionId, (originMessages) => preserveCompletedTurn(originMessages, {
+              requestId,
+              userContent: content,
+              answer,
+              createdAt,
+            }));
+            set((latest) => updateSessionError(latest, boundSessionId, '回答已生成，但同步失败；请稍后重新打开会话'));
+          }
         },
         onError: async (message) => {
-          const activeSessionId = get().currentSession?._id;
-          if (activeSessionId) {
-            await get().syncCurrentSessionAfterStream(activeSessionId);
-          }
-          set((state) => ({
-            messages: activeSessionId
-              ? state.messages
-              : state.messages.filter(m => m._id !== tempUserMessage._id),
-            error: message,
-            isLoading: false,
-            streamingContent: '',
-            toolStatus: null,
-            activeRequestController: null,
-            activeRequestId: null,
+          if (!ownsRequest()) return;
+          const partial = get().streamingContent;
+          const errorMessage = get().isStopping
+            ? '本轮已中断，已保留已生成内容'
+            : message || '生成失败';
+          await get().syncCurrentSessionAfterStream(boundSessionId, requestId, errorMessage);
+          if (requestAccount !== accountGeneration || get().activeRequestId) return;
+          updateSessionMessages(set, boundSessionId, (originMessages) => preserveInterruptedTurn(originMessages, {
+            requestId,
+            userContent: content,
+            partialContent: partial,
+            createdAt,
           }));
         },
       });
     } catch (err) {
+      if (!ownsRequest()) return;
+      const partial = get().streamingContent;
+      const errorMessage = err.name === 'AbortError'
+        ? '本轮已中断，已保留已生成内容'
+        : err.message;
       if (err.name === 'AbortError') {
-        await get().syncCurrentSessionAfterAbort();
-        return;
+        await get().syncCurrentSessionAfterAbort(boundSessionId, requestId, errorMessage);
+      } else {
+        await get().syncCurrentSessionAfterStream(boundSessionId, requestId, errorMessage);
       }
-      const activeSessionId = get().currentSession?._id;
-      if (activeSessionId) {
-        await get().syncCurrentSessionAfterStream(activeSessionId);
-      }
-      set((state) => ({
-        messages: activeSessionId
-          ? state.messages
-          : state.messages.filter(m => m._id !== tempUserMessage._id),
-        isLoading: false, streamingContent: '', toolStatus: null,
-        activeRequestController: null, activeRequestId: null, error: err.message,
+      if (requestAccount !== accountGeneration || get().activeRequestId) return;
+      updateSessionMessages(set, boundSessionId, (originMessages) => preserveInterruptedTurn(originMessages, {
+        requestId,
+        userContent: content,
+        partialContent: partial,
+        createdAt,
       }));
     }
+    return true;
   },
 
   regenerateMessage: async () => {
-    const { currentSession, messages } = get();
-    if (!currentSession) return;
-    const controller = new AbortController();
+    const state = get();
+    if (state.isLoading || state.isSessionSwitching || !state.currentSession) return false;
+
+    const { currentSession } = state;
     const requestId = createRequestId();
+    const requestAccount = accountGeneration;
+    const controller = new AbortController();
+    const boundSessionId = currentSession._id;
+    const createdAt = new Date().toISOString();
+    const ownsRequest = () => requestAccount === accountGeneration && get().activeRequestId === requestId;
 
     set({
       isLoading: true, isStopping: false, streamingContent: '',
       toolStatus: null, activeRequestController: controller, activeRequestId: requestId,
+      activeRequestSessionId: boundSessionId,
+      sessionErrors: { ...get().sessionErrors, [boundSessionId]: null },
+      error: null,
     });
 
     try {
-      // Remove last assistant content — will be streamed anew
-      const msgsWithoutLastAssistant = [...messages];
-      for (let i = msgsWithoutLastAssistant.length - 1; i >= 0; i--) {
-        if (msgsWithoutLastAssistant[i].role === 'assistant') {
-          msgsWithoutLastAssistant[i] = { ...msgsWithoutLastAssistant[i], content: '' };
-          break;
-        }
-      }
-      set({ messages: msgsWithoutLastAssistant });
-
-      await aiService.regenerateMessageStream(currentSession._id, {
+      await aiService.regenerateMessageStream(boundSessionId, {
         signal: controller.signal,
         requestId,
         onStart: (sessionId) => {
-          set((state) => ({
-            currentSession: state.currentSession?._id === sessionId
-              ? state.currentSession
-              : {
-                  ...(state.currentSession || {}),
-                  _id: sessionId,
-                },
-          }));
+          if (!ownsRequest() || sessionId !== boundSessionId) return;
         },
-        onToolCall: (tool) => set({ toolStatus: `正在调用 ${tool}...` }),
-        onToolResult: () => set({ toolStatus: null }),
-        onToken: (token) => set((state) => ({ streamingContent: state.streamingContent + token })),
+        onToolCall: (tool) => {
+          if (ownsRequest()) set({ toolStatus: `正在调用 ${tool}...` });
+        },
+        onToolResult: () => {
+          if (ownsRequest()) set({ toolStatus: null });
+        },
+        onToken: (token) => {
+          if (ownsRequest()) set((latest) => ({ streamingContent: latest.streamingContent + token }));
+        },
         onDone: async () => {
-          await get().syncCurrentSessionAfterStream();
-          set({ streamingContent: '', toolStatus: null, isLoading: false, activeRequestController: null, activeRequestId: null });
+          if (!ownsRequest()) return;
+          const answer = get().streamingContent;
+          const synced = await get().syncCurrentSessionAfterStream(boundSessionId, requestId);
+          if (!synced && requestAccount === accountGeneration && !get().activeRequestId) {
+            updateSessionMessages(set, boundSessionId, (originMessages) => preserveRegeneratedAnswer(
+              originMessages,
+              answer,
+              requestId,
+              createdAt
+            ));
+            set((latest) => updateSessionError(latest, boundSessionId, '新回答已生成，但同步失败；请稍后重新打开会话'));
+          }
         },
         onError: async (message) => {
-          await get().syncCurrentSessionAfterStream();
-          set({ error: message, isLoading: false, streamingContent: '', toolStatus: null, activeRequestController: null, activeRequestId: null });
+          if (!ownsRequest()) return;
+          await get().syncCurrentSessionAfterStream(boundSessionId, requestId, message || '生成失败，原回答已保留');
         },
       });
     } catch (err) {
+      if (!ownsRequest()) return;
+      const errorMessage = err.name === 'AbortError'
+        ? '本轮已中断，原回答已保留'
+        : err.message;
       if (err.name === 'AbortError') {
-        await get().syncCurrentSessionAfterAbort();
-        return;
+        await get().syncCurrentSessionAfterAbort(boundSessionId, requestId, errorMessage);
+      } else {
+        await get().syncCurrentSessionAfterStream(boundSessionId, requestId, errorMessage);
       }
-      await get().syncCurrentSessionAfterStream();
-      set({ isLoading: false, streamingContent: '', toolStatus: null, activeRequestController: null, activeRequestId: null, error: err.message });
     }
+    return true;
   },
 
   toggleSessionList: () => {
@@ -396,32 +742,76 @@ const useAIStore = create((set, get) => ({
     set({ showSessionList: false });
   },
 
-  cancelActiveRequest: () => {
+  resetForAccountChange: () => {
+    accountGeneration += 1;
+    sessionSwitchGeneration += 1;
+    const { activeRequestController, activeRequestId } = get();
+    if (activeRequestController) {
+      activeRequestController.abort();
+      if (activeRequestId) aiService.cancelRequest(activeRequestId).catch(() => {});
+    }
+
+    set({
+      sessions: [], currentSession: null, messages: [], showSessionList: false,
+      messagesBySession: {}, sessionMessageRevisions: {}, sessionErrors: {},
+      isLoading: false, isSessionSwitching: false, isStopping: false,
+      isPersonaViewOpen: false, isPersonaLoading: false, isPersonaSaving: false,
+      personaDirty: false, personaDirtyFields: {},
+      defaultPersona: {}, defaultEffectivePersona: { ...DEFAULT_AI_PERSONA },
+      sessionPersona: {}, effectivePersona: { ...DEFAULT_AI_PERSONA },
+      personaDraft: { ...EMPTY_AI_PERSONA },
+      activeRequestController: null, activeRequestId: null, activeRequestSessionId: null,
+      toolStatus: null, streamingContent: '', error: null,
+    });
+  },
+
+  cancelActiveRequest: async () => {
     const controller = get().activeRequestController;
     const requestId = get().activeRequestId;
-    if (!controller) return;
+    if (!controller || get().isStopping) return false;
 
     set({ isStopping: true });
-    aiService.cancelRequest(requestId).catch(() => {});
-    controller.abort();
+    try {
+      const result = await aiService.cancelRequest(requestId);
+      if (!result?.cancelled) {
+        set((state) => state.activeRequestId === requestId
+          ? { isStopping: false, error: '当前请求尚未就绪，请稍后再试' }
+          : state);
+        return false;
+      }
+      controller.abort();
+      return true;
+    } catch (err) {
+      set((state) => state.activeRequestId === requestId
+        ? { isStopping: false, error: err.message || '停止请求失败，请重试' }
+        : state);
+      return false;
+    }
   },
 
-  syncCurrentSessionAfterAbort: async (sessionIdOverride = null) => {
-    const { currentSession } = get();
-    const sessionId = sessionIdOverride || currentSession?._id;
+  syncCurrentSessionAfterAbort: async (sessionIdOverride = null, requestId = null, errorMessage = '本轮已中断') => {
+    const state = get();
+    const sessionId = sessionIdOverride || (requestId
+      ? state.activeRequestSessionId
+      : state.currentSession?._id) || null;
+    const generation = accountGeneration;
+    const canApply = () => (
+      generation === accountGeneration
+      && (!requestId || get().activeRequestId === requestId)
+    );
 
     if (!sessionId) {
-      set((state) => ({
-        messages: state.messages.filter((message) => !String(message._id).startsWith('temp-')),
+      set((state) => canApply() ? ({
         isLoading: false,
         isStopping: false,
         streamingContent: '',
         toolStatus: null,
         activeRequestController: null,
         activeRequestId: null,
-        error: null,
-      }));
-      return;
+        activeRequestSessionId: null,
+        ...updateSessionError(state, null, errorMessage),
+      }) : state);
+      return false;
     }
 
     try {
@@ -429,62 +819,116 @@ const useAIStore = create((set, get) => ({
         aiService.getSession(sessionId),
         aiService.getSessions(),
       ]);
+      if (!canApply()) return false;
 
-      set({
+      set((state) => ({
         sessions,
-        currentSession: sessionData.session,
-        messages: sessionData.messages,
-        sessionPersona: sessionData.session.aiPersona || {},
-        effectivePersona: withPersonaDefaults(sessionData.session.effectivePersona),
+        messagesBySession: { ...state.messagesBySession, [sessionId]: sessionData.messages },
+        sessionMessageRevisions: {
+          ...state.sessionMessageRevisions,
+          [sessionId]: (state.sessionMessageRevisions[sessionId] || 0) + 1,
+        },
+        ...(state.currentSession?._id === sessionId ? {
+          currentSession: sessionData.session,
+          messages: sessionData.messages,
+          sessionPersona: sessionData.session.aiPersona || {},
+          effectivePersona: withPersonaDefaults(sessionData.session.effectivePersona),
+        } : {}),
         isLoading: false,
         isStopping: false,
         streamingContent: '',
         toolStatus: null,
         activeRequestController: null,
         activeRequestId: null,
-        error: null,
-      });
-    } catch {
-      set((state) => ({
-        messages: state.messages.filter((message) => !String(message._id).startsWith('temp-')),
-        isLoading: false,
-        isStopping: false,
-        streamingContent: '',
-        toolStatus: null,
-        activeRequestController: null,
-        activeRequestId: null,
-        error: null,
+        activeRequestSessionId: null,
+        ...updateSessionError(state, sessionId, errorMessage),
       }));
+      return true;
+    } catch {
+      set((state) => canApply() ? ({
+        isLoading: false,
+        isStopping: false,
+        streamingContent: '',
+        toolStatus: null,
+        activeRequestController: null,
+        activeRequestId: null,
+        activeRequestSessionId: null,
+        ...updateSessionError(state, sessionId, errorMessage),
+      }) : state);
+      return false;
     }
   },
 
-  syncCurrentSessionAfterStream: async (sessionIdOverride = null) => {
-    const { currentSession } = get();
-    const sessionId = sessionIdOverride || currentSession?._id;
+  syncCurrentSessionAfterStream: async (sessionIdOverride = null, requestId = null, errorMessage = null) => {
+    const state = get();
+    const sessionId = sessionIdOverride || (requestId
+      ? state.activeRequestSessionId
+      : state.currentSession?._id) || null;
+    const generation = accountGeneration;
+    const canApply = () => (
+      generation === accountGeneration
+      && (!requestId || get().activeRequestId === requestId)
+    );
     if (!sessionId) {
-      set({ isLoading: false, streamingContent: '', toolStatus: null, activeRequestController: null, activeRequestId: null });
-      return;
+      if (canApply()) set((state) => ({
+        isLoading: false,
+        isStopping: false,
+        streamingContent: '',
+        toolStatus: null,
+        activeRequestController: null,
+        activeRequestId: null,
+        activeRequestSessionId: null,
+        ...updateSessionError(state, null, errorMessage),
+      }));
+      return false;
     }
     try {
       const [sessionData, sessions] = await Promise.all([
         aiService.getSession(sessionId),
         aiService.getSessions(),
       ]);
-      set({
-        sessions, currentSession: sessionData.session,
-        messages: sessionData.messages,
-        sessionPersona: sessionData.session.aiPersona || {},
-        effectivePersona: withPersonaDefaults(sessionData.session.effectivePersona),
-        isLoading: false, streamingContent: '', toolStatus: null,
-        activeRequestController: null, activeRequestId: null, error: null,
-      });
+      if (!canApply()) return false;
+      set((state) => ({
+        sessions,
+        messagesBySession: { ...state.messagesBySession, [sessionId]: sessionData.messages },
+        sessionMessageRevisions: {
+          ...state.sessionMessageRevisions,
+          [sessionId]: (state.sessionMessageRevisions[sessionId] || 0) + 1,
+        },
+        ...(state.currentSession?._id === sessionId ? {
+          currentSession: sessionData.session,
+          messages: sessionData.messages,
+          sessionPersona: sessionData.session.aiPersona || {},
+          effectivePersona: withPersonaDefaults(sessionData.session.effectivePersona),
+        } : {}),
+        isLoading: false,
+        streamingContent: '',
+        toolStatus: null,
+        isStopping: false,
+        activeRequestController: null,
+        activeRequestId: null,
+        activeRequestSessionId: null,
+        ...updateSessionError(state, sessionId, errorMessage),
+      }));
+      return true;
     } catch {
-      set({ isLoading: false, streamingContent: '', toolStatus: null, activeRequestController: null, activeRequestId: null });
+      if (canApply()) set((state) => ({
+        isLoading: false,
+        isStopping: false,
+        streamingContent: '',
+        toolStatus: null,
+        activeRequestController: null,
+        activeRequestId: null,
+        activeRequestSessionId: null,
+        ...updateSessionError(state, sessionId, errorMessage),
+      }));
+      return false;
     }
   },
 
   openPersonaSettings: async () => {
     const { currentSession } = get();
+    const generation = sessionSwitchGeneration;
 
     set({
       isPersonaViewOpen: true,
@@ -498,10 +942,12 @@ const useAIStore = create((set, get) => ({
 
     try {
       const defaultData = await aiService.getProfile();
+      if (generation !== sessionSwitchGeneration) return null;
       let sessionData = null;
 
       if (currentSession?._id) {
         sessionData = await aiService.getSessionPersona(currentSession._id);
+        if (generation !== sessionSwitchGeneration) return null;
       }
 
       const effectivePersona = withPersonaDefaults(
@@ -524,6 +970,7 @@ const useAIStore = create((set, get) => ({
           : state.currentSession,
       }));
     } catch (err) {
+      if (generation !== sessionSwitchGeneration) return null;
       set({
         isPersonaLoading: false,
         error: err.message,
@@ -569,6 +1016,7 @@ const useAIStore = create((set, get) => ({
 
   saveDefaultPersona: async () => {
     const { currentSession, defaultEffectivePersona, personaDraft, personaDirtyFields } = get();
+    const generation = sessionSwitchGeneration;
 
     set({ isPersonaSaving: true, error: null });
 
@@ -579,6 +1027,7 @@ const useAIStore = create((set, get) => ({
       }
 
       const profile = await aiService.updateProfile(compactDefaultPersonaDraft(nextDefaultDraft));
+      if (generation !== sessionSwitchGeneration) return null;
       let nextState = {
         defaultPersona: profile.persona || {},
         defaultEffectivePersona: withPersonaDefaults(profile.effectivePersona),
@@ -589,6 +1038,7 @@ const useAIStore = create((set, get) => ({
 
       if (currentSession?._id) {
         const sessionData = await aiService.getSessionPersona(currentSession._id);
+        if (generation !== sessionSwitchGeneration) return null;
         const effectivePersona = withPersonaDefaults(sessionData.effectivePersona);
 
         nextState = {
@@ -621,6 +1071,7 @@ const useAIStore = create((set, get) => ({
       set(nextState);
       return nextState;
     } catch (err) {
+      if (generation !== sessionSwitchGeneration) return null;
       set({ isPersonaSaving: false, error: err.message });
       throw err;
     }
@@ -629,6 +1080,7 @@ const useAIStore = create((set, get) => ({
   saveSessionPersona: async () => {
     const { currentSession, personaDraft, personaDirtyFields } = get();
     if (!currentSession?._id) return null;
+    const generation = sessionSwitchGeneration;
 
     set({ isPersonaSaving: true, error: null });
 
@@ -637,6 +1089,7 @@ const useAIStore = create((set, get) => ({
         currentSession._id,
         createDirtyPersonaPatch(personaDraft, personaDirtyFields)
       );
+      if (generation !== sessionSwitchGeneration) return null;
       const effectivePersona = withPersonaDefaults(result.effectivePersona);
 
       set({
@@ -663,13 +1116,19 @@ const useAIStore = create((set, get) => ({
 
       return result;
     } catch (err) {
+      if (generation !== sessionSwitchGeneration) return null;
       set({ isPersonaSaving: false, error: err.message });
       throw err;
     }
   },
 
   clearError: () => {
-    set({ error: null });
+    set((state) => ({
+      error: null,
+      ...(state.currentSession?._id
+        ? { sessionErrors: { ...state.sessionErrors, [state.currentSession._id]: null } }
+        : {}),
+    }));
   },
 }));
 

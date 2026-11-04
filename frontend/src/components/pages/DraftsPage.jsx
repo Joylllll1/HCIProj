@@ -1,171 +1,81 @@
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import Icon from '../common/Icon';
+import PageHeader from '../common/PageHeader';
 import TimeAgo from '../common/TimeAgo';
+import EmptyState from '../common/EmptyState';
+import ConfirmLeaveDialog from '../common/ConfirmLeaveDialog';
 import useAuthStore from '../../store/authStore';
+import useUiStore from '../../store/uiStore';
 import * as draftService from '../../services/draftService';
 
-const selectIsAuthenticated = (s) => s.isAuthenticated;
-
-function DraftsPage({ onNavigate }) {
-  const isAuthenticated = useAuthStore(selectIsAuthenticated);
+export default function DraftsPage({ onNavigate }) {
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const [drafts, setDrafts] = useState([]);
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [selectMode, setSelectMode] = useState(false);
   const [loading, setLoading] = useState(true);
-
+  const [error, setError] = useState('');
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [deleteError, setDeleteError] = useState('');
+  const [deleting, setDeleting] = useState(false);
+  const deletingRef = useRef(false);
+  const pageRef = useRef(null);
+  const loadDrafts = useCallback(async () => {
+    setLoading(true); setError('');
+    try { setDrafts(await draftService.fetchDrafts()); }
+    catch (err) { setError(err.message || '草稿加载失败，请重试。'); }
+    finally { setLoading(false); }
+  }, []);
   useEffect(() => {
-    if (!isAuthenticated) {
-      onNavigate('login');
-      return;
-    }
+    if (!isAuthenticated) { onNavigate('login'); return; }
     loadDrafts();
-  }, [isAuthenticated, onNavigate]);
-
-  const loadDrafts = async () => {
+  }, [isAuthenticated, onNavigate, loadDrafts]);
+  const toggle = (id) => setSelectedIds((current) => {
+    const next = new Set(current);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  const requestDelete = (items, batch = false) => {
+    setDeleteError('');
+    setDeleteTarget({ items, batch });
+  };
+  const deleteDrafts = async () => {
+    if (deletingRef.current || !deleteTarget?.items.length) return;
+    deletingRef.current = true;
+    setDeleting(true); setDeleteError('');
+    const ids = deleteTarget.items.map((draft) => draft.id);
     try {
-      const data = await draftService.fetchDrafts();
-      setDrafts(data);
-    } catch (err) {
-      console.error('加载草稿失败:', err);
-    } finally {
-      setLoading(false);
-    }
+      if (deleteTarget.batch) await draftService.deleteDrafts(ids);
+      else await draftService.deleteDraft(ids[0]);
+      setDrafts((items) => items.filter((item) => !ids.includes(item.id)));
+      setSelectedIds(new Set()); setSelectMode(false); setDeleteTarget(null);
+      useUiStore.getState().showToast(ids.length === 1 ? '草稿已删除' : `已删除 ${ids.length} 篇草稿`);
+      requestAnimationFrame(() => {
+        const next = pageRef.current?.querySelector('.draft-item .row-title, .page-empty button');
+        next?.focus({ preventScroll: true });
+      });
+    } catch (err) { setDeleteError(err.message || '删除失败，请重试。'); }
+    finally { deletingRef.current = false; setDeleting(false); }
   };
-
-  const handleSelectToggle = (id) => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
-      return next;
-    });
-  };
-
-  const handleDeleteSelected = async () => {
-    if (selectedIds.size === 0) return;
-    try {
-      const { deleteDrafts } = await import('../../services/draftService');
-      await deleteDrafts([...selectedIds]);
-      setDrafts((prev) => prev.filter((d) => !selectedIds.has(d.id)));
-      setSelectedIds(new Set());
-      setSelectMode(false);
-    } catch (err) {
-      console.error('删除草稿失败:', err);
-    }
-  };
-
-  const handleEditDraft = (draftId) => {
-    onNavigate('compose', { draftId });
-  };
-
-  const getContentPreview = (draft) => {
-    const text = draft.content || '';
-    return text.length > 80 ? text.slice(0, 80) + '...' : text;
-  };
-
-  const getTitle = (draft) => {
-    return draft.title || '（无标题）';
-  };
-
-  if (loading) {
-    return (
-      <div className="drafts-page max-w-[1180px] mx-auto p-6">
-        <div className="text-center text-text-3 py-12">加载中...</div>
-      </div>
-    );
-  }
-
+  const singleTarget = deleteTarget && !deleteTarget.batch ? deleteTarget.items[0] : null;
   return (
-    <div className="drafts-page max-w-[1180px] mx-auto">
-      <section className="drafts-header flex items-center justify-between mb-6">
-        <div>
-          <p className="eyebrow mb-6 text-blue text-xs font-bold tracking-widest uppercase">Draft Box</p>
-          <h1 className="m-0 text-[clamp(30px,4.2vw,44px)] leading-[1.1] tracking-tight">我的草稿箱</h1>
-          <p className="mt-[9px] mb-0 text-text-2">
-            您有 {drafts.length} 篇草稿
-          </p>
-        </div>
-        <div className="flex gap-2">
-          {drafts.length > 0 && (
-            <button
-              className="inline-flex items-center justify-center gap-[7px] border border-line rounded-full px-4 py-[10px] bg-white text-text-2 font-semibold transition-all duration-150 hover:bg-surface-soft"
-              onClick={() => { setSelectMode(!selectMode); setSelectedIds(new Set()); }}
-              type="button"
-            >
-              {selectMode ? '取消选择' : '选择'}
-            </button>
-          )}
-          <button
-            className="primary-button inline-flex items-center justify-center gap-[7px] border-0 rounded-full px-[18px] py-[10px] text-white bg-blue font-bold shadow-sm transition-all duration-150 hover:-translate-y-px hover:bg-blue-2"
-            onClick={() => onNavigate('compose')}
-            type="button"
-          >
-            发布新动态
-          </button>
-        </div>
-      </section>
-
-      {drafts.length === 0 ? (
-        <section className="empty-state text-center py-[60px]">
-          <div className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-surface-soft mb-4">
-            <Icon name="edit_note" className="text-text-3" style={{ fontSize: 40 }} />
-          </div>
-          <h2 className="text-xl font-bold text-text mb-2">暂无草稿</h2>
-          <p className="text-text-3 mb-6">保存您未发布的内容，随时继续编辑</p>
-          <button
-            className="primary-button inline-flex items-center justify-center gap-[7px] border-0 rounded-full px-[18px] py-[10px] text-white bg-blue font-bold shadow-sm"
-            onClick={() => onNavigate('compose')}
-            type="button"
-          >
-            发布新动态
-          </button>
+    <div className="drafts-page" ref={pageRef}>
+      <PageHeader title="草稿箱" description={loading ? '正在加载草稿…' : error ? '暂时无法加载草稿，请重试。' : `${drafts.length} 篇未发布，随时继续编辑。`} actions={<>
+        {drafts.length > 0 && <button className="secondary-button" type="button" aria-pressed={selectMode} onClick={() => { setSelectMode(!selectMode); setSelectedIds(new Set()); }}>{selectMode ? '退出批量管理' : '批量管理'}</button>}
+        <button className="primary-button" type="button" onClick={() => onNavigate('compose')}><Icon name="add" />写树洞</button>
+      </>} />
+      {error && <div className="feed-error" role="alert"><span>{error}</span><button type="button" onClick={loadDrafts}>重新加载</button></div>}
+      {loading ? <p className="page-loading" role="status">正在加载草稿…</p> : drafts.length ? <>
+        {selectMode && <div className="selection-toolbar"><span role="status">已选 {selectedIds.size} 篇</span><button type="button" onClick={() => setSelectedIds(selectedIds.size === drafts.length ? new Set() : new Set(drafts.map((draft) => draft.id)))}>{selectedIds.size === drafts.length ? '取消全选' : '全选'}</button><button type="button" className="danger-text" disabled={!selectedIds.size} onClick={() => requestDelete(drafts.filter((draft) => selectedIds.has(draft.id)), true)}>删除选中</button></div>}
+        <section className="drafts-list" aria-label="草稿列表">
+          {drafts.map((draft) => <article key={draft.id} className="draft-item">
+            {selectMode && <label className="draft-select"><input type="checkbox" aria-label={`选择草稿：${draft.title || '无标题'}`} checked={selectedIds.has(draft.id)} onChange={() => toggle(draft.id)} /></label>}
+            <div className="draft-copy"><button className="row-title" type="button" onClick={() => selectMode ? toggle(draft.id) : onNavigate('compose', { draftId: draft.id })}>{draft.title || '无标题'}</button><p>{draft.content || '图片草稿'}</p><div className="draft-meta"><TimeAgo compact timeString={draft.updatedAt} className="row-time" />{draft.tags?.length > 0 && <span className="draft-topics">{draft.tags.map((tag) => `#${tag}`).join(' ')}</span>}</div></div>
+            {!selectMode && <div className="draft-actions"><button type="button" className="row-edit" aria-label={`继续编辑：${draft.title || '无标题'}`} onClick={() => onNavigate('compose', { draftId: draft.id })}><Icon name="edit_square" /><span>继续编辑</span></button><button type="button" className="row-delete" aria-label={`删除草稿：${draft.title || '无标题'}`} onClick={() => requestDelete([draft])}><Icon name="delete" /><span>删除</span></button></div>}
+          </article>)}
         </section>
-      ) : (
-        <section className="drafts-list grid gap-3">
-          {drafts.map((draft) => (
-            <article
-              key={draft.id}
-              className={`draft-item flex gap-3 p-4 rounded-lg border border-line-soft bg-surface transition-all duration-150 hover:border-line ${selectMode ? 'cursor-default pl-2' : 'cursor-pointer'}`}
-              onClick={() => { if (selectMode) { handleSelectToggle(draft.id); } else { handleEditDraft(draft.id); } }}
-            >
-              {selectMode && (
-                <div className="flex items-center justify-center w-6 flex-shrink-0">
-                  <input
-                    type="checkbox"
-                    checked={selectedIds.has(draft.id)}
-                    onChange={() => handleSelectToggle(draft.id)}
-                    onClick={(e) => e.stopPropagation()}
-                    className="w-4 h-4 rounded border-line text-blue focus:ring-blue"
-                  />
-                </div>
-              )}
-              <div className="flex-1 min-w-0">
-                <h3 className="text-base font-bold text-text truncate">{getTitle(draft)}</h3>
-                <TimeAgo timeString={draft.updatedAt} className="block mt-0.5 text-text-3 text-xs" />
-                <p className="mt-2 text-sm text-text-2 line-clamp-2">{getContentPreview(draft)}</p>
-              </div>
-            </article>
-          ))}
-        </section>
-      )}
-
-      {selectMode && selectedIds.size > 0 && (
-        <section className="fixed bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-4 px-6 py-3 rounded-full bg-surface border border-line shadow-lg">
-          <span className="text-sm font-semibold text-text">已选中 {selectedIds.size} 篇</span>
-          <button
-            className="inline-flex items-center justify-center gap-[7px] border-0 rounded-full px-4 py-2 bg-red-500 text-white text-sm font-semibold"
-            onClick={handleDeleteSelected}
-            type="button"
-          >
-            删除选中
-          </button>
-        </section>
-      )}
+      </> : !error && <div className="page-empty"><EmptyState title="还没有草稿" description="在完整编辑器中保存，之后可以接着写。" /><button className="secondary-button" type="button" onClick={() => onNavigate('compose')}>开始写树洞</button></div>}
+      <ConfirmLeaveDialog open={!!deleteTarget} title={singleTarget ? '删除这篇草稿？' : `删除 ${deleteTarget?.items.length || 0} 篇草稿？`} description={singleTarget ? `“${singleTarget.title || '无标题'}”删除后无法恢复。` : '选中的草稿删除后无法恢复，请确认不再需要这些内容。'} error={deleteError} confirmText={deleting ? '删除中…' : '确认删除'} cancelText="保留草稿" mode="discard" pending={deleting} onConfirm={deleteDrafts} onCancel={() => { if (!deletingRef.current) setDeleteTarget(null); }} />
     </div>
   );
 }
-
-export default DraftsPage;

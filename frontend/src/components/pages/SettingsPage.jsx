@@ -1,5 +1,7 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import Icon from '../common/Icon';
+import PageHeader from '../common/PageHeader';
+import ThemeSelect from '../common/ThemeSelect';
 import useAuthStore from '../../store/authStore';
 import * as authService from '../../services/authService';
 import useUiStore from '../../store/uiStore';
@@ -93,17 +95,12 @@ function SettingsPage() {
 
   return (
     <div className="settings-page max-w-[960px] mx-auto">
-      <section className="section-head large flex items-center justify-between gap-[18px]">
-        <div>
-          <p className="eyebrow mb-6 text-blue text-xs font-bold tracking-widest uppercase">Settings</p>
-          <h1 className="m-0 text-[clamp(30px,4.2vw,44px)] leading-[1.1] tracking-tight">个人设置</h1>
-          <p className="mt-[9px] mb-0 text-text-2 leading-relaxed">管理你的账号和通知偏好。</p>
-        </div>
-      </section>
+      <PageHeader title="个人设置" description="管理显示、通知和账号。" />
       <div className="settings-grid grid gap-[18px]">
+        <section className="settings-card display-settings p-5"><h2 className="text-base font-semibold mb-3">显示偏好</h2><div className="flex items-center justify-between gap-4"><span>界面主题</span><ThemeSelect /></div><p className="text-xs text-text-3 mt-2">跟随系统会自动适应设备的深浅色设置。</p></section>
         {/* 账号信息 */}
         <section className="settings-card overflow-hidden rounded-md border border-line-soft bg-surface shadow-sm">
-          <div className="settings-card-head flex items-center gap-[14px] px-5 py-[18px] border-b border-line-soft bg-[#fafbfc]">
+          <div className="settings-card-head flex items-center gap-[14px] px-5 py-[18px] border-b border-line-soft bg-surface-soft">
             <Icon name="person" />
             <div><strong className="block text-base tracking-tight">账号信息</strong><p className="mt-[3px] mb-0 text-text-3 text-[13px]">你的校园邮箱与身份验证状态。</p></div>
           </div>
@@ -116,7 +113,7 @@ function SettingsPage() {
 
         {/* 通知偏好 */}
         <section className="settings-card overflow-hidden rounded-md border border-line-soft bg-surface shadow-sm">
-          <div className="settings-card-head flex items-center gap-[14px] px-5 py-[18px] border-b border-line-soft bg-[#fafbfc]">
+          <div className="settings-card-head flex items-center gap-[14px] px-5 py-[18px] border-b border-line-soft bg-surface-soft">
             <Icon name="notifications" />
             <div><strong className="block text-base tracking-tight">通知偏好</strong><p className="mt-[3px] mb-0 text-text-3 text-[13px]">选择你希望接收的通知类型。</p></div>
           </div>
@@ -130,9 +127,8 @@ function SettingsPage() {
               <div className="settings-row toggle-row flex items-center justify-between gap-4 px-5 py-3 border-b border-line-soft text-sm last:border-0" key={key}>
                 <span className="text-text-2">{label}</span>
                 <label className="toggle relative inline-block w-[44px] h-[26px] flex-shrink-0">
-                  <input className="opacity-0 w-0 h-0" type="checkbox" checked={prefs[key]} onChange={() => toggle(key)} disabled={savingKey !== null} />
+                  <input className="absolute inset-0 z-10 m-0 h-full w-full cursor-pointer opacity-0" type="checkbox" aria-label={label} checked={prefs[key]} onChange={() => toggle(key)} disabled={savingKey !== null} />
                   <span className={`toggle-slider absolute inset-0 rounded-full transition-colors duration-200 ${savingKey !== null ? 'cursor-not-allowed opacity-70' : 'cursor-pointer'} ${prefs[key] ? 'bg-blue' : 'bg-[#d1d5db]'}`}>
-                    <span className={`absolute bottom-[3px] left-[3px] w-5 h-5 rounded-full bg-white shadow-sm transition-transform duration-200 ${prefs[key] ? 'translate-x-[18px]' : ''}`} />
                   </span>
                 </label>
               </div>
@@ -142,22 +138,22 @@ function SettingsPage() {
 
         {/* 隐私与安全 */}
         <section className="settings-card overflow-hidden rounded-md border border-line-soft bg-surface shadow-sm">
-          <div className="settings-card-head flex items-center gap-[14px] px-5 py-[18px] border-b border-line-soft bg-[#fafbfc]">
+          <div className="settings-card-head flex items-center gap-[14px] px-5 py-[18px] border-b border-line-soft bg-surface-soft">
             <Icon name="shield_person" />
             <div><strong className="block text-base tracking-tight">隐私与安全</strong><p className="mt-[3px] mb-0 text-text-3 text-[13px]">管理密码与安全设置。</p></div>
           </div>
           <div className="settings-rows grid">
             <div className="settings-row flex items-center justify-between gap-4 px-5 py-[14px] text-sm">
               <span className="text-text-2">修改密码</span>
-              <button className="secondary-button inline-flex items-center justify-center gap-[7px] border border-line rounded-full px-[14px] py-[7px] bg-white text-text-2 text-[13px] font-semibold transition-all duration-150" type="button" onClick={() => navigate('settings-password')}>修改</button>
+              <button className="secondary-button inline-flex items-center justify-center gap-[7px] border border-line rounded-full px-[14px] py-[7px] bg-surface text-text-2 text-[13px] font-semibold transition-all duration-150" type="button" onClick={() => navigate('settings-password')}>修改</button>
             </div>
           </div>
         </section>
 
-        {/* 退出登录 — 移动端（侧边栏隐藏时可见） */}
-        <section className="settings-card overflow-hidden rounded-md border border-red/30 bg-surface shadow-sm lg:hidden">
+        {/* 账号操作统一位于设置页底部。 */}
+        <section className="settings-card settings-session-actions overflow-hidden rounded-md border border-line bg-surface">
           <button
-            className="flex items-center justify-center gap-2 w-full px-5 py-[14px] border-0 bg-transparent text-red text-sm font-bold transition-colors duration-150 hover:bg-red-50"
+            className="settings-logout"
             onClick={handleLogout}
             type="button"
           >

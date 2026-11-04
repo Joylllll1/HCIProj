@@ -1,34 +1,68 @@
 import Draft from '../models/Draft.js';
 import Post from '../models/Post.js';
 import AppError from '../utils/AppError.js';
-import { normalizeInlineImages } from '../utils/image.js';
+import {
+  getImageEncodedBytes,
+  storeInlineImages,
+  storeTrustedImages,
+} from './imageStorage.js';
+import { serializeDraftMedia, serializePostMedia } from '../utils/media.js';
+import { broadcast } from './sseManager.js';
 
 const MAX_DRAFTS = 10;
 
-const toDraftDto = (draft) => ({
-  ...draft,
-  image: draft.image || draft.images?.[0] || '',
-  images: Array.isArray(draft.images) && draft.images.length > 0
+const getDraftImages = (draft) => (Array.isArray(draft.images) && draft.images.length > 0
     ? draft.images
     : draft.image
       ? [draft.image]
-      : [],
-  id: draft._id.toString(),
-});
+      : []);
 
-const normalizeDraftData = (data = {}) => ({
-  title: data.title?.trim() || '',
-  content: data.content?.trim() || '',
-  moodType: data.moodType || null,
-  mood: data.mood || '平静',
-  tags: Array.isArray(data.tags)
-    ? data.tags.map((tag) => tag?.trim()).filter(Boolean)
-    : [],
-  images: normalizeInlineImages(
-    Array.isArray(data.images) ? data.images : data.image ? [data.image] : [],
-    { label: '草稿图片' },
-  ),
-});
+const toDraftDto = async (draft) => {
+  const images = getDraftImages(draft);
+  const imageBytes = await Promise.all(images.map((image) => getImageEncodedBytes(image)));
+  return serializeDraftMedia({
+    ...draft,
+    image: images[0] || '',
+    images,
+    imageBytes,
+    id: draft._id.toString(),
+  });
+};
+
+const normalizeDraftData = async (data = {}, currentDraft = null) => {
+  const sourceImages = Array.isArray(data.images)
+    ? data.images
+    : data.image
+      ? [data.image]
+      : [];
+  let images;
+
+  if (!currentDraft) {
+    images = await storeInlineImages(sourceImages, { label: '草稿图片' });
+  } else {
+    const originalImages = getDraftImages(currentDraft);
+    const currentDto = await toDraftDto(currentDraft);
+    const originalByUrl = new Map(currentDto.images.map((url, index) => [url, originalImages[index]]));
+    const trustedImages = sourceImages.map((image) => {
+      if (image === '' || image === undefined || image === null) return image;
+      if (typeof image === 'string' && /^data:image\//i.test(image)) return image;
+      if (originalByUrl.has(image)) return originalByUrl.get(image);
+      throw new AppError('草稿图片无效或已过期', 400, 'INVALID_IMAGE');
+    });
+    images = await storeTrustedImages(trustedImages, { label: '草稿图片' });
+  }
+
+  return {
+    title: data.title?.trim() || '',
+    content: data.content?.trim() || '',
+    moodType: data.moodType || null,
+    mood: data.mood || '平静',
+    tags: Array.isArray(data.tags)
+      ? data.tags.map((tag) => tag?.trim()).filter(Boolean)
+      : [],
+    images,
+  };
+};
 
 const assertDraftContent = (data) => {
   if (!data.content && (!Array.isArray(data.images) || data.images.length === 0)) {
@@ -41,7 +75,7 @@ export const createDraft = async (userId, data) => {
   if (count >= MAX_DRAFTS) {
     throw new AppError('草稿数量已达上限，请先删除部分草稿', 400, 'DRAFT_LIMIT_EXCEEDED');
   }
-  const payload = normalizeDraftData(data);
+  const payload = await normalizeDraftData(data);
   assertDraftContent(payload);
 
   const draft = await Draft.create({ ownerUserId: userId, ...payload });
@@ -50,9 +84,16 @@ export const createDraft = async (userId, data) => {
 
 export const getDrafts = async (userId) => {
   const drafts = await Draft.find({ ownerUserId: userId })
+    .select('title content tags updatedAt')
     .sort({ updatedAt: -1 })
     .lean();
-  return drafts.map((d) => toDraftDto(d));
+  return drafts.map((draft) => ({
+    id: draft._id.toString(),
+    title: draft.title,
+    content: draft.content,
+    tags: draft.tags,
+    updatedAt: draft.updatedAt,
+  }));
 };
 
 export const getDraftById = async (draftId, userId) => {
@@ -62,12 +103,15 @@ export const getDraftById = async (draftId, userId) => {
 };
 
 export const updateDraft = async (draftId, userId, data) => {
-  const payload = normalizeDraftData(data);
+  const currentDraft = await Draft.findOne({ _id: draftId, ownerUserId: userId }).lean();
+  if (!currentDraft) throw new AppError('草稿不存在', 404, 'DRAFT_NOT_FOUND');
+
+  const payload = await normalizeDraftData(data, currentDraft);
   assertDraftContent(payload);
 
   const draft = await Draft.findOneAndUpdate(
     { _id: draftId, ownerUserId: userId },
-    { ...payload, updatedAt: new Date() },
+    { $set: { ...payload, updatedAt: new Date() }, $unset: { image: '' } },
     { new: true },
   ).lean();
   if (!draft) throw new AppError('草稿不存在', 404, 'DRAFT_NOT_FOUND');
@@ -88,14 +132,7 @@ export const deleteDrafts = async (draftIds, userId) => {
 export const publishDraft = async (draftId, userId) => {
   const draft = await Draft.findOne({ _id: draftId, ownerUserId: userId });
   if (!draft) throw new AppError('草稿不存在', 404, 'DRAFT_NOT_FOUND');
-  const images = normalizeInlineImages(
-    Array.isArray(draft.images) && draft.images.length > 0
-      ? draft.images
-      : draft.image
-        ? [draft.image]
-        : [],
-    { label: '草稿图片' },
-  );
+  const images = await storeTrustedImages(getDraftImages(draft), { label: '草稿图片' });
   const content = draft.content?.trim() || '';
   if (!content && images.length === 0) {
     throw new AppError('草稿内容不能为空', 400, 'DRAFT_CONTENT_REQUIRED');
@@ -111,16 +148,22 @@ export const publishDraft = async (draftId, userId) => {
     images,
   });
 
+  try {
+    broadcast('new-post', {});
+  } catch (error) {
+    console.error('SSE broadcast failed after draft publication:', error);
+  }
+
   await Draft.deleteOne({ _id: draftId });
 
-  return {
+  return serializePostMedia({
     ...post.toObject(),
-    image: post.images?.[0] || '',
-    images: Array.isArray(post.images) ? post.images : [],
+    image: images[0] || '',
+    images,
     id: post._id.toString(),
     time: formatRelativeTime(post.createdAt),
     isLiked: false,
-  };
+  });
 };
 
 // ─── Helpers ───

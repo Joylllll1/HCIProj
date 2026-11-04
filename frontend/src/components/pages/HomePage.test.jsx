@@ -23,10 +23,6 @@ vi.mock('../common/Icon', () => ({
   default: () => <span data-testid="icon" />,
 }));
 
-vi.mock('../features/HeroCarousel', () => ({
-  default: () => <div data-testid="hero-carousel" />,
-}));
-
 vi.mock('../common/PostCard', () => ({
   default: ({ post }) => <div>{post.title}</div>,
 }));
@@ -103,6 +99,7 @@ describe('HomePage SSE updates', () => {
     useUiStore.setState(useUiStore.getInitialState(), true);
     MockEventSource.instances = [];
     vi.clearAllMocks();
+    window.scrollTo = vi.fn();
 
     useAuthStore.setState({
       user: null,
@@ -150,7 +147,22 @@ describe('HomePage SSE updates', () => {
     render(<HomePage />);
 
     expect(fetchPosts).toHaveBeenCalledTimes(1);
-    expect(fetchPosts).toHaveBeenCalledWith(1, '', { sort: 'latest' });
+    expect(fetchPosts).toHaveBeenCalledWith(1, '', { sort: 'latest', tag: '' });
+  });
+
+  it('opens the full composer from the feed entry', () => {
+    render(<HomePage />);
+    fireEvent.click(screen.getByRole('button', { name: '完整编辑器' }));
+    expect(useUiStore.getState().navigate).toHaveBeenCalledWith('compose', expect.objectContaining({ composeSeed: expect.any(Object) }));
+  });
+
+  it('filters by exact topic independently of search and can clear it', async () => {
+    render(<HomePage />);
+    // Both desktop and mobile topic lists expose the same action.
+    fireEvent.click(screen.getAllByRole('button', { name: /校园生活/ })[0]);
+    await waitFor(() => expect(usePostStore.getState().fetchPosts).toHaveBeenCalledWith(1, '', { sort: 'latest', tag: '校园生活' }));
+    fireEvent.click(screen.getByRole('button', { name: '清除筛选' }));
+    await waitFor(() => expect(useUiStore.getState().feedTag).toBe(''));
   });
 
   it('re-fetches from the backend when the search query changes', async () => {
@@ -168,7 +180,7 @@ describe('HomePage SSE updates', () => {
     rerender(<HomePage />);
 
     await waitFor(() => {
-      expect(fetchPosts).toHaveBeenCalledWith(1, '宿舍', { sort: 'latest' });
+      expect(fetchPosts).toHaveBeenCalledWith(1, '宿舍', { sort: 'latest', tag: '' });
     });
   });
 
@@ -204,7 +216,7 @@ describe('HomePage SSE updates', () => {
     fireEvent.click(screen.getByRole('button', { name: '高赞共鸣' }));
 
     await waitFor(() => {
-      expect(fetchPosts).toHaveBeenCalledWith(1, '', { sort: 'hot' });
+      expect(fetchPosts).toHaveBeenCalledWith(1, '', { sort: 'hot', tag: '' });
     });
   });
 

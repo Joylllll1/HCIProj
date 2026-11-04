@@ -18,11 +18,12 @@ function MobileNav({ activePage, onNavigate }) {
   };
 
   return (
-    <nav className="mobile-nav">
+    <nav className="mobile-nav" aria-label="移动导航">
       {navItems.slice(0, 2).map((item) => (
         <button
           className={`mobile-nav-item ${isActive(item) ? 'active' : ''}`}
           key={item.id}
+          aria-current={isActive(item) ? 'page' : undefined}
           onClick={() => onNavigate(item.id)}
           type="button"
         >
@@ -35,6 +36,7 @@ function MobileNav({ activePage, onNavigate }) {
         onClick={() => onNavigate('compose')}
         type="button"
         aria-label="发布新动态"
+        aria-current={activePage === 'compose' ? 'page' : undefined}
       >
         <Icon name="add" />
       </button>
@@ -42,6 +44,7 @@ function MobileNav({ activePage, onNavigate }) {
         <button
           className={`mobile-nav-item ${isActive(item) ? 'active' : ''}`}
           key={item.id}
+          aria-current={isActive(item) ? 'page' : undefined}
           onClick={() => onNavigate(item.id)}
           type="button"
         >

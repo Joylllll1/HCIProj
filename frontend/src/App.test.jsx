@@ -1,12 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import App from './App';
 import useAuthStore from './store/authStore';
 import useBookmarkStore from './store/bookmarkStore';
+import useAIStore from './store/aiStore';
 import useCommentStore from './store/commentStore';
+import useEventStore from './store/eventStore';
 import useNotificationStore from './store/notificationStore';
 import usePostStore from './store/postStore';
 import useUiStore from './store/uiStore';
+import * as eventService from './services/eventService';
+import * as commentService from './services/commentService';
 
 const { restoreSession, fetchPostById } = vi.hoisted(() => ({
   restoreSession: vi.fn(),
@@ -80,6 +84,16 @@ vi.mock('./services/apiClient', async () => {
 
 vi.mock('./services/reportService', () => ({
   createReport: vi.fn(),
+}));
+
+vi.mock('./services/eventService', () => ({
+  getPublicEvents: vi.fn().mockResolvedValue([]),
+  getMyEvents: vi.fn().mockResolvedValue([]),
+}));
+
+vi.mock('./services/commentService', async () => ({
+  ...await vi.importActual('./services/commentService'),
+  getComments: vi.fn(),
 }));
 
 vi.mock('./components/common/Toast', () => ({
@@ -166,10 +180,6 @@ vi.mock('./components/pages/AdminDashboard', () => ({
   default: () => null,
 }));
 
-vi.mock('./components/pages/AnnouncementsPage', () => ({
-  default: () => null,
-}));
-
 vi.mock('./components/common/UnderConstruction', () => ({
   default: () => null,
 }));
@@ -184,10 +194,13 @@ describe('App detail deletion flow', () => {
     vi.clearAllMocks();
     MockEventSource.instances = [];
     globalThis.EventSource = MockEventSource;
+    window.scrollTo = vi.fn();
     refreshSession.mockResolvedValue({});
     window.history.pushState({}, '', '/detail/post-1');
 
     useAuthStore.setState(useAuthStore.getInitialState(), true);
+    useAIStore.setState(useAIStore.getInitialState(), true);
+    useEventStore.setState(useEventStore.getInitialState(), true);
     useBookmarkStore.setState(useBookmarkStore.getInitialState(), true);
     useCommentStore.setState(useCommentStore.getInitialState(), true);
     useNotificationStore.setState(useNotificationStore.getInitialState(), true);
@@ -261,6 +274,60 @@ describe('App detail deletion flow', () => {
     });
   });
 
+  it('clears account-owned caches and reloads bookmarks when the authenticated user changes', async () => {
+    window.history.replaceState({}, '', '/');
+    useUiStore.setState({ activePage: 'home', aiOpen: true });
+    const fetchPosts = vi.fn().mockResolvedValue(null);
+    usePostStore.setState({ likedPosts: ['old-like'], myPosts: [{ id: 'old-post' }], fetchPosts });
+    useCommentStore.setState({ commentsMap: { 'old-post': [{ _id: 'old-comment' }] } });
+    useBookmarkStore.setState({ bookmarks: ['old-bookmark'] });
+    useNotificationStore.setState({
+      notifications: [{ _id: 'old-notification' }],
+      unreadCount: 1,
+      reset: useNotificationStore.getInitialState().reset,
+    });
+    useAIStore.setState({
+      sessions: [{ _id: 'old-session' }],
+      currentSession: { _id: 'old-session' },
+      messages: [{ role: 'user', content: '上一个账号的内容' }],
+    });
+    useEventStore.setState({ myEvents: [{ _id: 'old-application', applicantPhone: '13800000000' }] });
+    render(<App />);
+    expect(useAIStore.getState().messages).toHaveLength(1);
+
+    act(() => useAuthStore.setState({ user: { _id: 'user-2', role: 'user' } }));
+
+    await waitFor(() => expect(useBookmarkStore.getState().loadBookmarks).toHaveBeenCalledTimes(2));
+    expect(usePostStore.getState()).toMatchObject({ likedPosts: [], myPosts: [], selectedPost: null });
+    expect(useCommentStore.getState().commentsMap).toEqual({});
+    expect(useBookmarkStore.getState().bookmarks).toEqual([]);
+    expect(useNotificationStore.getState()).toMatchObject({ notifications: [], unreadCount: 0 });
+    expect(useAIStore.getState()).toMatchObject({ sessions: [], messages: [], currentSession: null });
+    expect(useUiStore.getState().aiOpen).toBe(false);
+    expect(useEventStore.getState().myEvents).toEqual([]);
+    expect(fetchPosts).toHaveBeenCalledWith(1, '', { tag: useUiStore.getState().feedTag });
+  });
+
+  it('loads the new account applications after clearing old account state', async () => {
+    window.history.replaceState({}, '', '/announcements');
+    useUiStore.setState({ activePage: 'announcements' });
+    eventService.getMyEvents.mockImplementation(async () => [{
+      _id: `application-${useAuthStore.getState().user._id}`,
+      title: `${useAuthStore.getState().user._id} 的活动申请`,
+      time: '2027-01-01T12:00:00Z',
+      type: '学术讲座', place: '仙林校区', status: 'pending',
+    }]);
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: '我的申请' }));
+    await screen.findByText('user-1 的活动申请');
+
+    act(() => useAuthStore.setState({ user: { _id: 'user-2', role: 'user' } }));
+
+    await screen.findByText('user-2 的活动申请');
+    expect(screen.queryByText('user-1 的活动申请')).not.toBeInTheDocument();
+    expect(useEventStore.getState().myEvents[0]._id).toBe('application-user-2');
+  });
+
   it('does not re-fetch the deleted post after leaving detail view', async () => {
     render(<App />);
 
@@ -301,6 +368,58 @@ describe('App detail deletion flow', () => {
       expect(fetchPostById).toHaveBeenCalledWith('post-2');
       expect(screen.getByTestId('detail-post-id')).toHaveTextContent('post-2');
     });
+  });
+
+  it('loads the new URL when moving between detail pages and when going back', async () => {
+    useUiStore.setState({ navigate: useUiStore.getInitialState().navigate });
+    fetchPostById.mockImplementation(async (id) => ({
+      id, ownerUserId: 'user-2', title: `Detail ${id}`, tags: ['树洞'], comments: 0,
+    }));
+    render(<App />);
+    expect(screen.getByTestId('detail-post-id')).toHaveTextContent('post-1');
+
+    act(() => useUiStore.getState().navigate('detail', { selectedPost: { id: 'post-2' } }));
+    await waitFor(() => expect(screen.getByTestId('detail-post-id')).toHaveTextContent('post-2'));
+    expect(fetchPostById).toHaveBeenCalledWith('post-2');
+    expect(window.location.pathname).toBe('/detail/post-2');
+
+    act(() => window.history.back());
+    await waitFor(() => expect(screen.getByTestId('detail-post-id')).toHaveTextContent('post-1'));
+    expect(window.location.pathname).toBe('/detail/post-1');
+    expect(fetchPostById).toHaveBeenCalledWith('post-1');
+  });
+
+  it.each(['comment', 'reply'])('keeps %s events received during the first inline discussion load', async (kind) => {
+    window.history.replaceState({}, '', '/');
+    useUiStore.setState({ activePage: 'home' });
+    usePostStore.setState({ selectedPost: null, posts: [{ id: 'post-1', comments: 0 }] });
+    let resolveComments;
+    commentService.getComments.mockReturnValueOnce(new Promise((resolve) => { resolveComments = resolve; }));
+    useCommentStore.setState({ fetchComments: useCommentStore.getInitialState().fetchComments });
+    render(<App />);
+    let pending;
+    act(() => { pending = useCommentStore.getState().fetchComments('post-1'); });
+
+    const es = MockEventSource.instances[0];
+    const parent = { id: 'comment-1', content: 'parent', replies: [] };
+    act(() => {
+      if (kind === 'comment') {
+        es.emit('comment-created', { postId: 'post-1', comment: parent });
+      } else {
+        es.emit('reply-created', { postId: 'post-1', commentId: parent.id, reply: { id: 'reply-1', content: 'reply' } });
+      }
+      es.emit('post-stats-updated', { postId: 'post-1', comments: kind === 'comment' ? 1 : 2 });
+      es.emit('comment-created', { postId: 'unopened-post', comment: { id: 'unrelated', replies: [] } });
+    });
+    await act(async () => {
+      resolveComments(kind === 'comment' ? [] : [parent]);
+      await pending;
+    });
+
+    const expected = kind === 'comment' ? 1 : 2;
+    expect(useCommentStore.getState().getFlatComments('post-1')).toHaveLength(expected);
+    expect(usePostStore.getState().posts[0].comments).toBe(expected);
+    expect(useCommentStore.getState().commentsMap['unopened-post']).toBeUndefined();
   });
 
   it('deduplicates comment-created SSE updates and increments count once', async () => {

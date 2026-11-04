@@ -140,7 +140,7 @@ function DailyFortune({ showToast }) {
             </div>
             <div className="space-y-2">
               {fortune.dos?.map((item, index) => (
-                <div key={index} className="px-3 py-2.5 rounded-lg bg-white/60 border border-line-soft">
+                <div key={index} className="px-3 py-2.5 rounded-lg bg-surface/60 border border-line-soft">
                   <div className="text-sm font-bold text-text mb-0.5">{item.activity}</div>
                   <div className="text-xs text-text-2 leading-relaxed">{item.description}</div>
                 </div>
@@ -154,7 +154,7 @@ function DailyFortune({ showToast }) {
             </div>
             <div className="space-y-2">
               {fortune.donts?.map((item, index) => (
-                <div key={index} className="px-3 py-2.5 rounded-lg bg-white/60 border border-line-soft">
+                <div key={index} className="px-3 py-2.5 rounded-lg bg-surface/60 border border-line-soft">
                   <div className="text-sm font-bold text-text mb-0.5">{item.activity}</div>
                   <div className="text-xs text-text-2 leading-relaxed">{item.description}</div>
                 </div>

@@ -1,0 +1,78 @@
+/* Shared controls render their open state in the same visual system as the page. */
+.select-trigger { display: inline-flex; align-items: center; justify-content: space-between; flex: none; gap: 12px; min-height: 34px; max-width: 100%; padding: 6px 10px; border: 1px solid var(--color-line); border-radius: 5px; background: var(--color-surface); color: var(--color-text-2); font: inherit; font-size: 12px; line-height: 1.5; text-align: left; cursor: pointer; transition: border-color 150ms ease, background-color 150ms ease; }
+.select-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.select-trigger > .app-icon { flex: none; width: 14px; height: 14px; color: var(--color-text-3); stroke-width: 1.5; }
+.select-trigger:hover { background: var(--color-surface-soft); border-color: var(--color-text-3); }
+.select-trigger[aria-expanded="true"] { border-color: var(--color-blue); }
+.select-trigger:focus-visible { outline: 2px solid var(--color-blue); outline-offset: 2px; }
+.select-trigger:disabled { opacity: .5; cursor: not-allowed; }
+.select-menu { position: fixed; z-index: 350; box-sizing: border-box; overflow-y: auto; overscroll-behavior: contain; padding: 5px; border: 1px solid var(--color-line); border-radius: 7px; background: var(--color-surface); color: var(--color-text); box-shadow: 0 8px 24px oklch(.15 .008 325 / .13); scrollbar-width: thin; }
+.select-option { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-height: 34px; padding: 7px 9px; border-radius: 4px; color: var(--color-text-2); font-size: 12px; line-height: 1.6; text-align: left; cursor: pointer; overflow-wrap: anywhere; }
+.select-option > span { min-width: 0; }
+.select-option.is-active { background: var(--color-surface-soft); color: var(--color-text); }
+.select-option[aria-selected="true"] { color: var(--color-blue); font-weight: 550; }
+.select-option > .app-icon { flex: none; width: 14px; height: 14px; stroke-width: 1.6; }
+.select-option[aria-disabled="true"] { opacity: .45; cursor: not-allowed; }
+.select-group { padding: 10px 9px 5px; font-size: 10px; line-height: 1.6; color: var(--color-text-3); }
+.select-menu > .select-group:first-child { padding-top: 5px; }
+.select-trigger.feed-tag-select { min-width: 110px; max-width: 160px; }
+.quick-compose-actions > .select-trigger { max-width: 130px; }
+.discussion-filters > .select-trigger { max-width: 200px; }
+.select-trigger.theme-select { min-width: 104px; max-width: 140px; }
+.playground-topic .select-trigger { border: 0; padding-inline: 0; background: transparent; font-size: 11px; min-height: 34px; }
+.select-trigger.event-type-select { width: 100%; min-height: 40px; font-size: 14px; }
+.select-trigger.auth-email-select { flex: none; width: 180px; max-width: 56%; min-height: 44px; padding: 8px 10px; border: 0; border-radius: 0; background: transparent; background-image: none; font-size: 13px; }
+.select-trigger.auth-email-select:focus-visible { outline-offset: -3px; }
+
+/* Notifications use reading width, with quieter actions and clear content hierarchy. */
+.notification-trigger { position: relative; }
+.notification-badge { position: absolute; top: -1px; right: -1px; display: grid; place-items: center; min-width: 16px; height: 16px; padding-inline: 4px; border-radius: 8px; background: var(--color-red); color: oklch(.99 .002 325); font-size: 10px; line-height: 1; font-weight: 550; }
+.notif-modal-overlay { position: fixed; inset: 0; z-index: 180; display: grid; align-items: start; justify-items: center; padding: clamp(24px, 10dvh, 88px) 24px 24px; background: oklch(.15 .008 325 / .32); }
+.notif-modal-panel { display: flex; flex-direction: column; width: min(640px, 100%); min-width: 0; max-height: min(720px, calc(100dvh - 128px)); overflow: hidden; border: 1px solid var(--color-line); border-radius: 9px; background: var(--color-surface); box-shadow: var(--shadow-md); }
+.notif-header { display: flex; align-items: center; justify-content: space-between; flex: none; gap: 16px; padding: 20px 24px; border-bottom: 1px solid var(--color-line); }
+.notif-heading { display: flex; align-items: baseline; flex-wrap: wrap; column-gap: 12px; row-gap: 4px; }
+.notif-heading h2 { margin: 0; color: var(--color-text); font-size: 18px; line-height: 1.5; font-weight: 600; }
+.notif-heading > span { font-size: 11px; line-height: 1.6; color: var(--color-text-3); }
+.notif-actions { display: flex; align-items: center; flex: none; gap: 12px; }
+.notif-mark-read { display: inline-flex; align-items: center; gap: 5px; min-height: 30px; padding: 4px 2px; border: 0; border-radius: 4px; background: transparent; color: var(--color-text-2); font-size: 11px; font-weight: 400; }
+.notif-mark-read .app-icon { width: 13px; height: 13px; }
+.notif-mark-read:hover { color: var(--color-blue); }
+.notif-close-btn { display: grid; place-items: center; flex: none; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--color-text-3); }
+.notif-close-btn .app-icon { width: 16px; height: 16px; stroke-width: 1.5; }
+.notif-close-btn:hover { background: var(--color-surface-soft); color: var(--color-text); }
+.notif-modal-list { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+.notif-item { display: flex; align-items: start; gap: 12px; width: 100%; padding: 20px 24px; border: 0; border-bottom: 1px solid var(--color-line-soft); border-radius: 0; background: transparent; text-align: left; color: var(--color-text); cursor: pointer; }
+.notif-item:last-child { border-bottom: 0; }
+.notif-item:hover { background: var(--color-surface-soft); }
+.notif-item:focus-visible { outline-offset: -3px; }
+.notif-dot { flex: none; width: 6px; height: 6px; margin-top: 7px; border-radius: 50%; background: var(--color-blue); }
+.notif-dot.is-read { visibility: hidden; }
+.notif-copy { display: flex; flex: 1; min-width: 0; flex-direction: column; align-items: start; }
+.notif-copy > strong { font-size: 13px; line-height: 1.6; font-weight: 500; overflow-wrap: anywhere; }
+.notif-item.unread .notif-copy > strong { font-weight: 600; }
+.notif-content { margin-top: 5px; color: var(--color-text-2); font-size: 14px; line-height: 1.8; white-space: pre-wrap; overflow-wrap: anywhere; }
+.notif-copy time { margin-top: 9px; color: var(--color-text-3); font-size: 11px; line-height: 1.5; }
+.notif-item > .app-icon { flex: none; width: 14px; height: 14px; margin-top: 2px; color: var(--color-text-3); stroke-width: 1.5; }
+.notif-empty { display: flex; flex-direction: column; align-items: center; padding: 52px 24px 60px; text-align: center; }
+.notif-empty > .app-icon { width: 25px; height: 25px; color: var(--color-text-3); stroke-width: 1.4; }
+.notif-empty > p { margin: 16px 0 8px; font-size: 14px; color: var(--color-text-2); }
+.notif-empty > span { color: var(--color-text-3); font-size: 12px; line-height: 1.8; }
+.notif-loading { margin: 0; padding: 32px 24px; color: var(--color-text-2); font-size: 13px; text-align: center; }
+.notif-error { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 24px; color: var(--color-red); font-size: 12px; line-height: 1.7; border-bottom: 1px solid var(--color-line); }
+.notif-error button { padding: 5px; border: 0; background: transparent; color: var(--color-red); font-size: 12px; flex: none; }
+[data-theme="dark"] .notif-modal-overlay { background: oklch(.12 .005 325 / .65); }
+@media (max-width: 680px) {
+  .select-trigger.feed-tag-select { min-width: 96px; max-width: 125px; }
+  .quick-compose-actions > .select-trigger { max-width: 112px; padding-inline: 8px; gap: 8px; }
+  .select-trigger.auth-email-select { width: 160px; font-size: 12px; }
+  .notif-modal-overlay { align-items: end; padding: 16px 12px max(12px, env(safe-area-inset-bottom, 0px)); }
+  .notif-modal-panel { width: 100%; max-height: calc(100dvh - 64px); }
+  .notif-header { padding: 16px; gap: 12px; }
+  .notif-heading { display: block; }
+  .notif-heading h2 { font-size: 17px; }
+  .notif-heading > span { display: block; margin-top: 3px; }
+  .notif-actions { gap: 9px; }
+  .notif-item { padding: 17px 16px; gap: 10px; }
+  .notif-content { font-size: 13px; }
+  .notif-error { padding-inline: 16px; }
+}

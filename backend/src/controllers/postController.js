@@ -6,9 +6,9 @@ export const create = async (req, res) => {
 };
 
 export const list = async (req, res) => {
-  const { page = 1, limit = 20, query, sort = 'latest' } = req.query;
+  const { page = 1, limit = 20, query, tag, sort = 'latest' } = req.query;
   const userId = req.user?._id?.toString();
-  const result = await postService.getPosts({ page: +page, limit: +limit, query, sort, userId });
+  const result = await postService.getPosts({ page: +page, limit: +limit, query, tag, sort, userId });
   res.json(result);
 };
 

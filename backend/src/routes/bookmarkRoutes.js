@@ -11,6 +11,8 @@ router.post('/migrate', bookmarkController.migrateBookmarks);
 router.post('/folders', bookmarkController.createFolder);
 router.put('/folders/:folderId', bookmarkController.renameFolder);
 router.delete('/folders/:folderId', bookmarkController.deleteFolder);
+router.post('/move-many', bookmarkController.moveMany);
+router.post('/remove-many', bookmarkController.removeMany);
 router.post('/:postId', bookmarkController.saveBookmark);
 router.delete('/:postId', bookmarkController.removeBookmark);
 

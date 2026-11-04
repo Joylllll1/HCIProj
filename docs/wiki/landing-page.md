@@ -1,6 +1,8 @@
 # Landing Page 设计文档
 
 > 为 NJU 树洞系统设计一个项目落地页，作为未登录用户的第一视觉入口。
+>
+> **历史文档**：本文是落地页的初版方案，部分设想（轮播、营销区块）没有进入最终实现。当前的产品与界面约定见 [product-brief.md](../design/product-brief.md)、[ui-spec.md](../design/ui-spec.md)，改版说明见 [frontend-redesign.md](../frontend-redesign.md)。
 
 ## 1. 设计目标
 

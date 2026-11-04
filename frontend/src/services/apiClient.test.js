@@ -93,6 +93,28 @@ describe('apiClient auth retry flow', () => {
     expect(assign).not.toHaveBeenCalled();
   });
 
+  it.each([500, 503])('preserves the session when the refresh service returns %i', async (status) => {
+    globalThis.fetch
+      .mockResolvedValueOnce(jsonResponse({ error: 'Token 已过期' }, { status: 401 }))
+      .mockResolvedValueOnce(jsonResponse({ error: '服务暂时不可用' }, { status }));
+
+    await expect(request('/api/protected')).rejects.toMatchObject({ status, message: '服务暂时不可用' });
+    expect(useAuthStore.getState().user?._id).toBe('u1');
+    expect(useAuthStore.getState().isAuthenticated).toBe(true);
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it('preserves the session when the refresh request cannot reach the server', async () => {
+    const offline = new TypeError('Failed to fetch');
+    globalThis.fetch
+      .mockResolvedValueOnce(jsonResponse({ error: 'Token 已过期' }, { status: 401 }))
+      .mockRejectedValueOnce(offline);
+
+    await expect(request('/api/protected')).rejects.toBe(offline);
+    expect(useAuthStore.getState().isAuthenticated).toBe(true);
+    expect(assign).not.toHaveBeenCalled();
+  });
+
   it('keeps auth state intact when logout request fails', async () => {
     globalThis.fetch.mockResolvedValueOnce(
       jsonResponse({ error: '服务器内部错误' }, { status: 500 }),

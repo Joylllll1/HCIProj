@@ -1,4 +1,6 @@
+import PageHeader from '../common/PageHeader';
 import React, { useCallback, useEffect, useState } from 'react';
+import TimeAgo from '../common/TimeAgo';
 import Icon from '../common/Icon';
 import ConfirmLeaveDialog from '../common/ConfirmLeaveDialog';
 import EmptyState from '../common/EmptyState';
@@ -16,6 +18,7 @@ function MyPostsPage({ compact, onNavigate }) {
   const query = useUiStore((s) => s.query);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
 
@@ -41,13 +44,14 @@ function MyPostsPage({ compact, onNavigate }) {
   };
 
   const handleDelete = async () => {
-    if (!deleteTarget) return;
+    if (!deleteTarget || deleting) return;
     setDeleting(true);
+    setDeleteError('');
     try {
       await deletePost(deleteTarget.id);
       setDeleteTarget(null);
-    } catch {
-      // Keep dialog open so the user can retry or cancel.
+    } catch (error) {
+      setDeleteError(error.message || '删除失败，请重试。');
     } finally {
       setDeleting(false);
     }
@@ -75,7 +79,7 @@ function MyPostsPage({ compact, onNavigate }) {
           <button
             type="button"
             onClick={loadMyPosts}
-            className="inline-flex items-center gap-2 rounded-full border border-line bg-white px-4 py-2 text-sm font-semibold text-text-2 transition-colors duration-150 hover:text-text hover:border-blue/40"
+            className="inline-flex items-center gap-2 rounded-full border border-line bg-surface px-4 py-2 text-sm font-semibold text-text-2 transition-colors duration-150 hover:text-text hover:border-blue/40"
           >
             重试
           </button>
@@ -108,39 +112,31 @@ function MyPostsPage({ compact, onNavigate }) {
             />
           </section>
         ) : (
-          <section className="grid gap-3 mt-6">
+          <section className="personal-post-list">
             {filteredPosts.map((post) => {
               const isOwner = currentUserId && post.ownerUserId === currentUserId;
               return (
                 <div
                   key={post.id}
-                  className="min-w-0 flex items-center justify-between gap-4 p-4 rounded-xl border border-line bg-surface backdrop-blur-sm shadow-sm transition-all duration-200 hover:-translate-y-px hover:shadow-md"
+                  className="personal-post-row"
                 >
-                  <div className="min-w-0 flex-1 cursor-pointer" onClick={() => handleOpenPost(post)}>
-                    <div className="font-semibold text-text truncate">{post.title}</div>
-                    <div className="flex items-center gap-3 mt-1.5 text-xs text-text-3">
-                      <span>{post.time}</span>
+                  <div className="personal-post-copy">
+                    <button type="button" className="row-title" onClick={() => handleOpenPost(post)}>{post.title}</button>
+                    <p className="row-preview">{post.content}</p>
+                    <div className="personal-post-metadata">
+                      <TimeAgo compact timeString={post.createdAt} />
                       <span className="inline-flex items-center gap-1">
-                        <Icon name="favorite" style={{ fontSize: '14px' }} /> {post.likes || 0}
+                        <Icon name="favorite" /> {post.likes || 0}
                       </span>
                       <span className="inline-flex items-center gap-1">
-                        <Icon name="chat_bubble" style={{ fontSize: '14px' }} /> {post.comments || 0}
+                        <Icon name="chat_bubble" /> {post.comments || 0}
                       </span>
                       <span className="inline-flex items-center gap-1">
-                        <Icon name="bookmark" style={{ fontSize: '14px' }} /> {post.saves || 0}
+                        <Icon name="bookmark" /> {post.saves || 0}
                       </span>
+                      {isOwner && <button className="row-delete" onClick={() => { setDeleteError(''); setDeleteTarget(post); }} type="button" aria-label={`删除帖子：${post.title}`}><Icon name="delete" /><span>删除</span></button>}
                     </div>
                   </div>
-                  {isOwner && (
-                    <button
-                      className="flex-shrink-0 inline-flex items-center gap-1.5 px-3 py-2 border border-line rounded-full bg-white text-text-2 text-xs font-semibold transition-all duration-150 hover:border-red/40 hover:text-red hover:bg-red-soft/50"
-                      onClick={() => setDeleteTarget(post)}
-                      type="button"
-                    >
-                      <Icon name="delete" style={{ fontSize: '15px' }} />
-                      删除
-                    </button>
-                  )}
                 </div>
               );
             })}
@@ -151,24 +147,20 @@ function MyPostsPage({ compact, onNavigate }) {
   };
 
   return (
-    <div className="collection-page max-w-[1180px] mx-auto">
+    <div className="collection-page my-posts-page">
       {!compact && (
-        <section className="collection-hero">
-          <div>
-            <p className="eyebrow mb-[18px] text-blue text-xs font-bold tracking-widest uppercase">My Posts</p>
-            <h1 className="m-0 text-[clamp(30px,4.2vw,44px)] leading-[1.1] tracking-tight">我的帖子</h1>
-            <p className="mt-[9px] mb-0 text-text-2 leading-relaxed">管理你发布的所有帖子。</p>
-          </div>
-        </section>
+        <PageHeader title="我的帖子" description="查看和管理你发布的树洞。" />
       )}
       {renderContent()}
       <ConfirmLeaveDialog
         open={!!deleteTarget}
         title="删除帖子"
-        description="确定要删除这篇帖子吗？此操作不可撤销。"
+        description={`“${deleteTarget?.title || '无标题'}”删除后无法恢复。`}
+        error={deleteError}
         confirmText={deleting ? '删除中...' : '确认删除'}
         cancelText="取消"
         mode="discard"
+        pending={deleting}
         onConfirm={handleDelete}
         onCancel={() => setDeleteTarget(null)}
       />

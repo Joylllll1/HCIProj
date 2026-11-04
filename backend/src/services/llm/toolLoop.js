@@ -18,9 +18,9 @@ function throwIfAborted(signal) {
   }
 }
 
-async function streamFinalAnswer({ messages, signal, writeEvent }) {
+async function streamFinalAnswer({ messages, signal, writeEvent, llmCall = callLLM }) {
   throwIfAborted(signal);
-  const finalResult = await callLLM({
+  const finalResult = await llmCall({
     messages,
     stream: true,
     signal,
@@ -74,7 +74,14 @@ async function streamFinalAnswer({ messages, signal, writeEvent }) {
   return { content: fullContent, reasoningContent };
 }
 
-export async function runToolLoop({ messages, signal, writeEvent, initialToolCallCount = 0 }) {
+export async function runToolLoop({
+  messages,
+  signal,
+  writeEvent,
+  initialToolCallCount = 0,
+  llmCall = callLLM,
+  toolExecutor = executeTool,
+}) {
   let toolCallCount = initialToolCallCount;
   let rounds = 0;
   const workingMessages = [...messages];
@@ -85,7 +92,7 @@ export async function runToolLoop({ messages, signal, writeEvent, initialToolCal
       ...workingMessages,
       { role: 'system', content: DECISION_PROMPT },
     ];
-    const result = await callLLM({
+    const result = await llmCall({
       messages: decisionMessages,
       tools: toolSchemas,
       toolChoice: 'auto',
@@ -116,6 +123,7 @@ export async function runToolLoop({ messages, signal, writeEvent, initialToolCal
         messages: workingMessages,
         signal,
         writeEvent,
+        llmCall,
       });
       return {
         content: finalAnswer.content,
@@ -138,7 +146,7 @@ export async function runToolLoop({ messages, signal, writeEvent, initialToolCal
       toolCallCount += 1;
       if (toolCallCount > MAX_TOOL_CALLS) {
         workingMessages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify({ error: '工具调用次数已达上限' }) });
-        break;
+        continue;
       }
 
       let args = {};
@@ -146,7 +154,7 @@ export async function runToolLoop({ messages, signal, writeEvent, initialToolCal
       throwIfAborted(signal);
       writeEvent(sseToolCall(tc.function.name, args));
 
-      const toolResult = await executeTool(tc.function.name, args, signal).catch(e => ({ error: e.message }));
+      const toolResult = await toolExecutor(tc.function.name, args, signal).catch(e => ({ error: e.message }));
       throwIfAborted(signal);
       writeEvent(sseToolResult(tc.function.name));
       workingMessages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify(toolResult) });
@@ -160,6 +168,7 @@ export async function runToolLoop({ messages, signal, writeEvent, initialToolCal
     messages: workingMessages,
     signal,
     writeEvent,
+    llmCall,
   });
   return {
     content: finalAnswer.content,

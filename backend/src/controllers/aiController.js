@@ -3,6 +3,19 @@ import * as aiPersonaService from '../services/aiPersonaService.js';
 
 const activeAIRequests = new Map();
 
+function registerActiveAIRequest(requestKey, abort) {
+  let resolveSettled;
+  const entry = {
+    abort,
+    settled: new Promise((resolve) => {
+      resolveSettled = resolve;
+    }),
+    settle: () => resolveSettled(),
+  };
+  activeAIRequests.set(requestKey, entry);
+  return entry;
+}
+
 function createRequestAbortSignal(req, res) {
   const controller = new AbortController();
   const abort = () => {
@@ -35,6 +48,7 @@ export const sendMessage = async (req, res) => {
   const { sessionId, message, context, requestId } = req.body;
   const { signal, abort, cleanup } = createRequestAbortSignal(req, res);
   const requestKey = requestId ? `${req.user.id}:${requestId}` : null;
+  let activeRequest = null;
 
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -49,14 +63,17 @@ export const sendMessage = async (req, res) => {
 
   try {
     if (requestKey) {
-      activeAIRequests.set(requestKey, {
-        abort: () => {
-          console.log('[ai] server-side cancel requested:', requestKey);
-          abort();
-        },
+      activeRequest = registerActiveAIRequest(requestKey, () => {
+        console.log('[ai] server-side cancel requested:', requestKey);
+        abort();
       });
     }
-    await aiService.sendMessage(req.user.id, sessionId, message, { signal, emitEvent, context });
+    await aiService.sendMessage(req.user.id, sessionId, message, {
+      signal,
+      emitEvent,
+      context,
+      turnId: requestId,
+    });
   } catch (error) {
     if (!signal.aborted && !res.writableEnded) {
       const { sseError } = await import('../services/llm/sseEvents.js');
@@ -64,10 +81,11 @@ export const sendMessage = async (req, res) => {
     }
   } finally {
     if (requestKey) {
-      activeAIRequests.delete(requestKey);
+      if (activeAIRequests.get(requestKey) === activeRequest) activeAIRequests.delete(requestKey);
     }
     if (!signal.aborted && !res.writableEnded) res.end();
     cleanup();
+    activeRequest?.settle();
   }
 };
 
@@ -76,13 +94,12 @@ export const regenerateMessage = async (req, res) => {
   const { requestId } = req.body || {};
   const { signal, abort, cleanup } = createRequestAbortSignal(req, res);
   const requestKey = requestId ? `${req.user.id}:${requestId}` : null;
+  let activeRequest = null;
 
   if (requestKey) {
-    activeAIRequests.set(requestKey, {
-      abort: () => {
-        console.log('[ai] server-side cancel requested:', requestKey);
-        abort();
-      },
+    activeRequest = registerActiveAIRequest(requestKey, () => {
+      console.log('[ai] server-side cancel requested:', requestKey);
+      abort();
     });
   }
 
@@ -106,10 +123,11 @@ export const regenerateMessage = async (req, res) => {
     }
   } finally {
     if (requestKey) {
-      activeAIRequests.delete(requestKey);
+      if (activeAIRequests.get(requestKey) === activeRequest) activeAIRequests.delete(requestKey);
     }
     if (!signal.aborted && !res.writableEnded) res.end();
     cleanup();
+    activeRequest?.settle();
   }
 };
 
@@ -126,6 +144,7 @@ export const cancelRequest = async (req, res) => {
   }
 
   activeRequest.abort();
+  await activeRequest.settled;
   return res.json({ success: true, cancelled: true });
 };
 

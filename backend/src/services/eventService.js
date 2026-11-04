@@ -1,9 +1,12 @@
 import Event from '../models/Event.js';
 import AuditLog from '../models/AuditLog.js';
 import AppError from '../utils/AppError.js';
+import { storeInlineImage } from './imageStorage.js';
+import { serializeEventMedia } from '../utils/media.js';
 import { notifyAnnouncementBroadcast, notifyEventApproved, notifyEventRejected } from './notificationService.js';
 
-const MAX_EVENT_IMAGE_BYTES = 3 * 1024 * 1024;
+const serializeEvents = (events) => events.map(serializeEventMedia);
+const serializeEvent = (event) => serializeEventMedia(event.toObject ? event.toObject() : event);
 
 function ensureApplicantField(value, message, errorCode) {
   if (!value || !value.trim()) {
@@ -45,9 +48,7 @@ export async function createEvent(eventData, userId) {
   ensureApplicantField(applicantStudentId, '请输入申请人学号', 'MISSING_APPLICANT_STUDENT_ID');
   ensureApplicantField(applicantPhone, '请输入申请人手机号', 'MISSING_APPLICANT_PHONE');
   ensureApplicantField(applicantQQ, '请输入申请人QQ号', 'MISSING_APPLICANT_QQ');
-  if (image && Buffer.byteLength(image, 'utf8') > MAX_EVENT_IMAGE_BYTES) {
-    throw new AppError('活动海报过大，请上传 3MB 以内图片', 400, 'IMAGE_TOO_LARGE');
-  }
+  const storedImage = await storeInlineImage(image, '活动海报');
 
   const event = await Event.create({
     title: title.trim(),
@@ -55,7 +56,7 @@ export async function createEvent(eventData, userId) {
     place: place.trim(),
     time: new Date(time),
     description: description?.trim() || '',
-    image: image?.trim() || '',
+    image: storedImage,
     status: 'pending',
     submittedBy: userId,
     applicantName: applicantName?.trim() || '',
@@ -64,55 +65,61 @@ export async function createEvent(eventData, userId) {
     applicantQQ: applicantQQ?.trim() || '',
   });
 
-  return event;
+  return serializeEvent(event);
 }
 
 // ─── Event Queries ───
 
 export async function getPendingEvents() {
-  return Event.find({ status: 'pending' })
+  const events = await Event.find({ status: 'pending' })
     .populate('submittedBy', 'email nickname')
     .sort({ createdAt: -1 })
     .lean();
+  return serializeEvents(events);
 }
 
 export async function getApprovedEvents() {
-  return Event.find({ status: 'approved' })
+  const events = await Event.find({ status: 'approved' })
     .populate('submittedBy', 'email nickname')
     .populate('reviewedBy', 'email nickname')
     .sort({ reviewedAt: -1 })
     .lean();
+  return serializeEvents(events);
 }
 
 export async function getRejectedEvents() {
-  return Event.find({ status: 'rejected' })
+  const events = await Event.find({ status: 'rejected' })
     .populate('submittedBy', 'email nickname')
     .populate('reviewedBy', 'email nickname')
     .sort({ reviewedAt: -1 })
     .lean();
+  return serializeEvents(events);
 }
 
 export async function getArchivedEvents() {
-  return Event.find({ status: 'archived' })
+  const events = await Event.find({ status: 'archived' })
     .populate('submittedBy', 'email nickname')
     .populate('reviewedBy', 'email nickname')
     .sort({ reviewedAt: -1 })
     .lean();
+  return serializeEvents(events);
 }
 
 export async function getPublicEvents() {
   // Public events include archived items so the announcement page can render "past events".
-  return Event.find({ status: { $in: ['approved', 'archived'] } })
+  const events = await Event.find({ status: { $in: ['approved', 'archived'] } })
     .select('title type place time description image reviewedAt status')
     .sort({ reviewedAt: -1 })
     .lean();
+  return serializeEvents(events);
 }
 
 export async function getMyEvents(userId) {
-  return Event.find({ submittedBy: userId })
+  const events = await Event.find({ submittedBy: userId })
     .select('title type place time description image status reviewedAt rejectionReason createdAt')
     .sort({ createdAt: -1 })
     .lean();
+  return serializeEvents(events);
 }
 
 // ─── Event Actions ───
@@ -146,7 +153,7 @@ export async function approveEvent(eventId, adminId) {
   notifyEventApproved(event.submittedBy, event.title, event._id).catch(() => {});
   notifyAnnouncementBroadcast(event.title, event._id, { excludeUserIds: [event.submittedBy] }).catch(() => {});
 
-  return event;
+  return serializeEvent(event);
 }
 
 export async function rejectEvent(eventId, adminId, reason) {
@@ -181,7 +188,7 @@ export async function rejectEvent(eventId, adminId, reason) {
   // 触发审核拒绝通知（不等待完成）
   notifyEventRejected(event.submittedBy, event.title, reason.trim(), event._id).catch(() => {});
 
-  return event;
+  return serializeEvent(event);
 }
 
 export async function archiveEvent(eventId, adminId) {
@@ -204,7 +211,7 @@ export async function archiveEvent(eventId, adminId) {
     reason: '活动归档',
   });
 
-  return event;
+  return serializeEvent(event);
 }
 
 export async function deleteEvent(eventId, adminId) {
@@ -226,5 +233,5 @@ export async function deleteEvent(eventId, adminId) {
     reason: '活动下架删除',
   });
 
-  return event;
+  return serializeEvent(event);
 }
