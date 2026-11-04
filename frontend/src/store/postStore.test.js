@@ -57,6 +57,21 @@ describe('postStore fetchPosts', () => {
     ]);
   });
 
+  it.each(['fetchPosts', 'fetchMyPosts'])('keeps bookmark changes when an older %s response arrives', async (method) => {
+    const deferred = createDeferred();
+    postService[method].mockReturnValueOnce(deferred.promise);
+    useBookmarkStore.getState().applyBookmarkState({ version: 7, bookmarks: ['p'] });
+    const pending = usePostStore.getState()[method]();
+    useBookmarkStore.getState().applyBookmarkState({ version: 8, bookmarks: [] });
+    usePostStore.getState().applyRealtimePostStats('p', { saves: 2 });
+    const posts = [{ id: 'p', isSaved: true, saves: 3 }];
+    deferred.resolve(method === 'fetchPosts' ? { posts, total: 1 } : posts);
+    await pending;
+    const items = usePostStore.getState()[method === 'fetchPosts' ? 'posts' : 'myPosts'];
+    expect(items[0]).toMatchObject({ isSaved: false, saves: 2 });
+    expect(usePostStore.getState().postStatsById.p.saves).toBe(2);
+  });
+
   it('appends the next page when loading more posts', async () => {
     postService.fetchPosts.mockResolvedValueOnce({
       posts: [{ id: 'post-2', title: 'Second post', isLiked: false }],

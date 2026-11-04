@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 export default function useBookmarkSelection({ scope, visibleIds, onMove, onRemove, onRefresh }) {
   const [managing, setManaging] = useState(false);
@@ -10,6 +10,7 @@ export default function useBookmarkSelection({ scope, visibleIds, onMove, onRemo
   const [message, setMessage] = useState('');
   const requestRef = useRef(false);
   const scopeRef = useRef({ key: scope });
+  const visibleIdsRef = useRef(new Set());
   const mounted = useRef(true);
   const resultRef = useRef(null);
   const manageRef = useRef(null);
@@ -30,10 +31,22 @@ export default function useBookmarkSelection({ scope, visibleIds, onMove, onRemo
   }, [scope]);
 
   const visibleKey = visibleIds.join(',');
-  useEffect(() => {
+  useLayoutEffect(() => {
     const valid = new Set(visibleKey.split(','));
-    setSelected((ids) => ids.filter((id) => valid.has(id)));
+    visibleIdsRef.current = valid;
+    setSelected((ids) => {
+      const remaining = ids.filter((id) => valid.has(id));
+      return remaining.length === ids.length ? ids : remaining;
+    });
   }, [visibleKey]);
+
+  const canShowDialog = pending || selected.length > 0;
+  useEffect(() => {
+    if (canShowDialog || (!choosingTarget && !confirming)) return;
+    setChoosingTarget(false);
+    setConfirming(false);
+    setTarget('');
+  }, [canShowDialog, choosingTarget, confirming]);
 
   const toggle = (id) => {
     if (requestRef.current) return;
@@ -55,18 +68,20 @@ export default function useBookmarkSelection({ scope, visibleIds, onMove, onRemo
       const results = data.results || [];
       const count = (statuses) => results.filter((item) => statuses.includes(item.status)).length;
       const failed = results.filter((item) => item.status === 'failed').map((item) => item.postId);
-      setSelected(failed);
+      const retryable = failed.filter((id) => visibleIdsRef.current.has(id));
+      setSelected(retryable);
       setConfirming(false);
-      setChoosingTarget(kind === 'move' && failed.length > 0);
+      setChoosingTarget(kind === 'move' && retryable.length > 0);
       const parts = [
         count(['moved', 'removed']) && `已${kind === 'move' ? '移动' : '取消收藏'} ${count(['moved', 'removed'])} 篇`,
         count(['unchanged']) && `${count(['unchanged'])} 篇${kind === 'move' ? '已在目标收藏夹' : '已取消收藏'}`,
         count(['not_found', 'not_saved']) && `${count(['not_found', 'not_saved'])} 篇已失效或已取消收藏`,
-        failed.length && `${failed.length} 篇失败，请重试`,
+        failed.length && `${failed.length} 篇失败`,
+        retryable.length && '请重试',
         data.reconciling && '分类同步待恢复，请刷新核对',
       ].filter(Boolean);
       setMessage(parts.join('，'));
-      if (!failed.length) setTarget('');
+      if (!retryable.length) setTarget('');
     } catch (error) {
       if (!mounted.current || scopeRef.current !== submittedScope) return;
       setConfirming(false);
@@ -100,6 +115,7 @@ export default function useBookmarkSelection({ scope, visibleIds, onMove, onRemo
   };
 
   return { managing, setManaging, selected, toggle, selectAll, target, setTarget,
-    choosingTarget, setChoosingTarget, openTarget, confirming, setConfirming, pending, message,
+    choosingTarget: choosingTarget && canShowDialog, setChoosingTarget, openTarget,
+    confirming: confirming && canShowDialog, setConfirming, pending, message,
     execute, finish, resultRef, manageRef, moveRef };
 }

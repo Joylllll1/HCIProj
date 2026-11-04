@@ -3,6 +3,7 @@ import * as bookmarkService from '../services/bookmarkService';
 import { loadJSON } from '../utils';
 import useAuthStore from './authStore';
 import usePostStore from './postStore';
+import { fetchPostById } from '../services/postService';
 
 const DEFAULT_FOLDERS = [{ id: 'all', name: '全部', isDefault: true }];
 const LEGACY_MIGRATION_KEY = 'nju_bookmarks_server_migrated_v1';
@@ -77,17 +78,43 @@ function isCurrent(store, token) {
 }
 
 const useBookmarkStore = create((set, get) => {
-  const perform = async (request, { batch = false } = {}) => {
+  const countReads = new Map();
+  const perform = async (request, { postId } = {}) => {
     const token = captureAccount(get());
+    const previousStats = usePostStore.getState().postStatsById;
     try {
       const data = await request();
       if (!isCurrent(get(), token)) throw new Error('账号已切换');
       const accepted = get().applyBookmarkState(data);
-      if (batch && accepted) {
-        for (const post of data.postStates || []) {
-          usePostStore.getState().syncSaveState(post.postId, { saved: post.isSaved, saves: post.saves });
+      const postStates = data.postStates || (postId ? [{ postId, saves: data.saves }] : []);
+      void Promise.all(postStates.map(async (post) => {
+        const store = usePostStore.getState();
+        const observedStats = store.postStatsById[post.postId];
+        if (accepted && (observedStats?.saves === post.saves || observedStats === previousStats[post.postId])) {
+          store.applyRealtimePostStats(post.postId, { saves: post.saves });
+          return;
         }
-      }
+        // HTTP and SSE have no shared revision. Re-read overlapping updates
+        // rather than deciding freshness from the user's bookmark version.
+        const read = {};
+        countReads.set(post.postId, read);
+        const saveVersion = store.saveObservationVersions[post.postId];
+        try {
+          const fresh = await fetchPostById(post.postId);
+          const current = usePostStore.getState();
+          if (isCurrent(get(), token)
+            && countReads.get(post.postId) === read
+            && current.saveObservationVersions[post.postId] === saveVersion
+            && current.postStatsById[post.postId]?.saves === observedStats?.saves) {
+            usePostStore.getState().applyRealtimePostStats(post.postId, { saves: fresh.saves });
+          }
+        } catch {
+          // Preserve the most recent observed count if reconciliation fails.
+        } finally {
+          if (countReads.get(post.postId) === read) countReads.delete(post.postId);
+        }
+      }));
+      if (!isCurrent(get(), token)) throw new Error('账号已切换');
       return data;
     } catch (error) {
       if (isCurrent(get(), token) && (error.status === 409 || error.data?.errorCode === 'BOOKMARK_RECONCILING')) {
@@ -107,6 +134,7 @@ const useBookmarkStore = create((set, get) => {
         return null;
       }
       set({ ...next, loading: false, initialized: true });
+      usePostStore.getState().syncBookmarkMembership(next.bookmarks);
       return next;
     },
 
@@ -126,7 +154,8 @@ const useBookmarkStore = create((set, get) => {
         if (!isCurrent(get(), token)) return null;
         let next = get().applyBookmarkState(data);
 
-        if (!hasMigratedLegacyBookmarks()) {
+        const isPreview = import.meta.env.DEV && new URLSearchParams(window.location.search).get('preview') === '1';
+        if (!isPreview && !hasMigratedLegacyBookmarks()) {
           const legacyPayload = getLegacyPayload();
           if (hasLegacyBookmarkData(legacyPayload)) {
             const migrated = await bookmarkService.migrateLegacyBookmarks(legacyPayload);
@@ -144,7 +173,7 @@ const useBookmarkStore = create((set, get) => {
 
     toggleBookmark: async (itemId) => {
       if (get().bookmarks.includes(itemId)) {
-        const data = await perform(() => bookmarkService.removeBookmark(itemId));
+        const data = await perform(() => bookmarkService.removeBookmark(itemId), { postId: itemId });
         return { status: 'removed', data };
       }
       set({ pendingBookmarkItem: { id: itemId, type: 'post' }, folderSelectorOpen: true });
@@ -169,8 +198,10 @@ const useBookmarkStore = create((set, get) => {
     selectFolder: async (folderId) => {
       const pendingItem = get().pendingBookmarkItem;
       if (!pendingItem?.id) return null;
-      const data = await perform(() => bookmarkService.saveBookmark(pendingItem.id, folderId));
-      set({ folderSelectorOpen: false, pendingBookmarkItem: null });
+      const data = await perform(() => bookmarkService.saveBookmark(pendingItem.id, folderId), { postId: pendingItem.id });
+      if (get().pendingBookmarkItem === pendingItem) {
+        set({ folderSelectorOpen: false, pendingBookmarkItem: null });
+      }
       return { status: 'added', data };
     },
 
@@ -180,11 +211,11 @@ const useBookmarkStore = create((set, get) => {
     deleteFolder: (folderId) => perform(() => bookmarkService.deleteBookmarkFolder(folderId)),
     moveBookmarks: (postIds, folderId) => {
       const version = get().version;
-      return perform(() => bookmarkService.moveBookmarks(postIds, folderId, version), { batch: true });
+      return perform(() => bookmarkService.moveBookmarks(postIds, folderId, version));
     },
     removeBookmarks: (postIds) => {
       const version = get().version;
-      return perform(() => bookmarkService.removeBookmarks(postIds, version), { batch: true });
+      return perform(() => bookmarkService.removeBookmarks(postIds, version));
     },
     reset: () => set((state) => ({ ...buildInitialState(), accountGeneration: state.accountGeneration + 1 })),
   };

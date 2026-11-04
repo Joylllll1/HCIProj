@@ -9,10 +9,6 @@ vi.mock('../../services/postService', () => ({
   fetchSavedPosts: vi.fn().mockResolvedValue([]),
 }));
 
-vi.mock('../common/PostCard', () => ({
-  default: ({ post, onBookmark }) => <div>{post.title}<button type="button" onClick={onBookmark} aria-label={`取消收藏：${post.title}`}>取消收藏</button></div>,
-}));
-
 vi.mock('../common/Icon', () => ({
   default: () => <span data-testid="icon" />,
 }));
@@ -318,11 +314,17 @@ describe('BookmarksPage batch management', () => {
     fireEvent.click(button);
   };
 
+  const findRemoveButton = async (title) => {
+    const openButton = await screen.findByRole('button', { name: `查看树洞：${title}` });
+    return within(openButton.closest('article')).getByRole('button', { name: '取消收藏' });
+  };
+
   it('confirms individual bookmark removal, allows cancellation and sends only the confirmed post', async () => {
     const options = props();
     render(<BookmarksPage {...options} />);
-    await screen.findByRole('button', { name: '取消收藏：收藏 0' });
-    fireEvent.click(screen.getByRole('button', { name: '取消收藏：收藏 0' }));
+    const removeButton = await findRemoveButton('收藏 0');
+    removeButton.focus();
+    fireEvent.click(removeButton);
     expect(screen.getByRole('dialog')).toHaveTextContent('取消收藏 1 篇？');
     expect(screen.getByRole('dialog')).not.toHaveTextContent('原帖仍保留');
     expect(screen.getByRole('dialog')).not.toHaveTextContent('收藏 0');
@@ -330,18 +332,43 @@ describe('BookmarksPage batch management', () => {
     expect(options.onBookmark).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: '取消', exact: true }));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '取消收藏：收藏 0' }));
+    expect(removeButton).toHaveFocus();
+    fireEvent.click(removeButton);
     fireEvent.click(screen.getByRole('button', { name: '确认取消' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     expect(options.onRemoveBookmarks).toHaveBeenCalledWith(['p0']);
     expect(options.onRemoveBookmarks).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    { bookmarks: ['p0', 'p1'], removedId: 'p0', title: '收藏 0', focusName: '查看树洞：收藏 1' },
+    { bookmarks: ['p0', 'p1'], removedId: 'p1', title: '收藏 1', focusName: '查看树洞：收藏 0' },
+    { bookmarks: ['p0'], removedId: 'p0', title: '收藏 0', focusName: '全部(0)' },
+  ])('restores focus to $focusName after the confirmed card is removed', async ({ bookmarks, removedId, title, focusName }) => {
+    const remaining = bookmarks.filter((id) => id !== removedId);
+    const options = props({
+      bookmarks,
+      onRemoveBookmarks: vi.fn(async () => {
+        view.rerender(<BookmarksPage {...options} bookmarks={remaining} />);
+        return { results: [{ postId: removedId, status: 'removed' }] };
+      }),
+    });
+    const view = render(<BookmarksPage {...options} />);
+    const removeButton = await findRemoveButton(title);
+    removeButton.focus();
+    fireEvent.click(removeButton);
+    fireEvent.click(screen.getByRole('button', { name: '确认取消' }));
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(removeButton).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: focusName })).toHaveFocus();
+  });
+
   it('keeps single removal confirmation open on failure and supports retry', async () => {
     const options = props({ onRemoveBookmarks: vi.fn().mockRejectedValueOnce(new Error('网络中断'))
       .mockResolvedValueOnce({ results: [{ postId: 'p0', status: 'removed' }] }) });
     render(<BookmarksPage {...options} />);
-    fireEvent.click(await screen.findByRole('button', { name: '取消收藏：收藏 0' }));
+    fireEvent.click(await findRemoveButton('收藏 0'));
     fireEvent.click(screen.getByRole('button', { name: '确认取消' }));
     await screen.findByRole('alert');
     expect(screen.getByRole('dialog')).toHaveTextContent('网络中断');

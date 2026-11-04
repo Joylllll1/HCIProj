@@ -58,6 +58,8 @@ function BookmarksPage({
   const [singleError, setSingleError] = useState('');
   const singleRequest = useRef(false);
   const singleScope = useRef(null);
+  const focusAfterSingleRemoval = useRef(null);
+  const savedPostListRef = useRef(null);
   const [visiblePostCount, setVisiblePostCount] = useState(BOOKMARKS_PAGE_BATCH_SIZE);
   const menuRefs = useRef({});
   const menuTriggerRefs = useRef({});
@@ -82,6 +84,7 @@ function BookmarksPage({
 
   useEffect(() => {
     singleScope.current = {};
+    focusAfterSingleRemoval.current = null;
     setSingleRemoval(null);
     setSinglePending(false);
     setSingleError('');
@@ -91,6 +94,7 @@ function BookmarksPage({
   const confirmSingleRemoval = async () => {
     if (!singleRemoval || singleRequest.current) return;
     const scope = singleScope.current;
+    const index = visibleFolderPosts.findIndex((post) => post.id === singleRemoval.id);
     singleRequest.current = true;
     setSinglePending(true);
     setSingleError('');
@@ -101,6 +105,7 @@ function BookmarksPage({
         setSingleError('取消收藏失败，请重试。');
         return;
       }
+      focusAfterSingleRemoval.current = Math.max(0, index);
       setSingleRemoval(null);
       showToast(data.reconciling ? '已取消收藏，分类同步待恢复，请刷新核对。' : '已取消收藏');
     } catch (error) {
@@ -110,6 +115,18 @@ function BookmarksPage({
       if (singleScope.current === scope) setSinglePending(false);
     }
   };
+
+  useEffect(() => {
+    const index = focusAfterSingleRemoval.current;
+    if (singleRemoval || index === null) return;
+    focusAfterSingleRemoval.current = null;
+
+    // The dialog has closed and the remaining cards are committed.
+    const actions = savedPostListRef.current?.querySelectorAll('.post-title-link');
+    const nextAction = actions?.[Math.min(index, actions.length - 1)];
+    const focusTarget = nextAction ?? folderButtonRefs.current[activeFolder];
+    focusTarget?.focus();
+  }, [activeFolder, singleRemoval]);
 
   useLayoutEffect(() => {
     if (!showFolderMenu) return undefined;
@@ -475,7 +492,7 @@ function BookmarksPage({
         />
       ) : (
         <>
-          <section className="saved-post-list">
+          <section className="saved-post-list" ref={savedPostListRef}>
             {visibleFolderPosts.map((post) => {
               const postView = getPostLikeView(post);
               return (
