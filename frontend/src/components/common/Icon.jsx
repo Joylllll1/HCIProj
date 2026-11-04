@@ -9,6 +9,7 @@ const Icon = ({ name, filled = false, className = '', size, style }) => {
     dynamic_feed: 'M4 5.5h16M4 12h10M4 18.5h13',
     campaign: 'M5 13h3l8 4V7l-8 4H5v2Zm3 0v5',
     bookmark: 'M7 5h10v15l-5-3-5 3V5Z',
+    drive_file_move: 'M3 7a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v9H3V7Zm5 7h8m-3-3 3 3-3 3',
     edit_square: 'M5 19h14M7 15.5 16.5 6 18 7.5 8.5 17H7v-1.5Z',
     admin_panel_settings: 'M12 3 19 6v5c0 4-2.8 7.4-7 9-4.2-1.6-7-5-7-9V6l7-3Zm0 5v5l3 2',
     park: 'M12 3 6 10h4l-3 5h4v5h2v-5h4l-3-5h4l-6-7Z',

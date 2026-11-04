@@ -643,6 +643,10 @@ function App() {
           {activePage === 'drafts' && <DraftsPage onNavigate={navigate} />}
           {activePage === 'my' && (
             <MyPage
+              key={currentUserId}
+              accountKey={currentUserId}
+              onMoveBookmarks={useBookmarkStore.getState().moveBookmarks}
+              onRemoveBookmarks={useBookmarkStore.getState().removeBookmarks}
               posts={posts}
               bookmarks={bookmarks}
               likedPosts={likedPosts}
@@ -660,6 +664,10 @@ function App() {
           )}
           {activePage === 'bookmarks' && (
             <BookmarksPage
+              key={currentUserId}
+              accountKey={currentUserId}
+              onMoveBookmarks={useBookmarkStore.getState().moveBookmarks}
+              onRemoveBookmarks={useBookmarkStore.getState().removeBookmarks}
               posts={posts}
               bookmarks={bookmarks}
               likedPosts={likedPosts}

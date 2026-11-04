@@ -89,6 +89,138 @@ describe('isolated course preview', () => {
     expect(published.images).toEqual(images);
     expect(network).not.toHaveBeenCalled();
   });
+
+  const bookmarkRequest = (suffix = '', method = 'GET', body) => window.fetch(`/api/bookmarks${suffix}`, {
+    method,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+
+  it('moves saved demo posts to all without changing their saves or duplicating membership', async () => {
+    const initial = await (await bookmarkRequest()).json();
+    const saved = await (await bookmarkRequest('/demo-1', 'POST')).json();
+    expect(saved.version).toBe(initial.version + 1);
+
+    const response = await bookmarkRequest('/move-many', 'POST', {
+      postIds: ['demo-3', 'demo-1', 'demo-3', 'demo-2', 'demo-404'],
+      targetFolderId: 'all',
+      expectedVersion: saved.version,
+    });
+    expect(response.status).toBe(200);
+    const moved = await response.json();
+    expect(moved).toEqual({
+      bookmarks: ['demo-3', 'demo-1'], collectionFolders: initial.collectionFolders,
+      bookmarkFolders: {}, version: saved.version + 1,
+      results: [
+        { postId: 'demo-3', status: 'moved', fromFolderId: 'later', toFolderId: 'all' },
+        { postId: 'demo-1', status: 'unchanged', fromFolderId: 'all', toFolderId: 'all' },
+        { postId: 'demo-2', status: 'not_saved' },
+        { postId: 'demo-404', status: 'not_found' },
+      ],
+      postStates: [],
+      reconciling: false,
+      summary: { requested: 4, changed: 1, unchanged: 1, failed: 0 },
+    });
+    const retry = await (await bookmarkRequest('/move-many', 'POST', {
+      postIds: ['demo-3'], targetFolderId: 'all', expectedVersion: moved.version,
+    })).json();
+    expect(retry).toMatchObject({ version: moved.version, results: [{ postId: 'demo-3', status: 'unchanged' }] });
+    const assigned = await (await bookmarkRequest('/move-many', 'POST', {
+      postIds: ['demo-1', 'demo-3'], targetFolderId: 'later', expectedVersion: retry.version,
+    })).json();
+    expect(assigned).toMatchObject({
+      version: retry.version + 1,
+      bookmarks: moved.bookmarks,
+      bookmarkFolders: { later: ['demo-1', 'demo-3'] },
+      results: [
+        { postId: 'demo-1', status: 'moved', fromFolderId: 'all', toFolderId: 'later' },
+        { postId: 'demo-3', status: 'moved', fromFolderId: 'all', toFolderId: 'later' },
+      ],
+    });
+    const posts = await (await window.fetch('/api/posts/saved')).json();
+    expect(posts).toMatchObject([{ id: 'demo-1', isSaved: true, saves: saved.saves }, { id: 'demo-3', isSaved: true, saves: 15 }]);
+    expect(network).not.toHaveBeenCalled();
+  });
+
+  it('returns post states and decrements saves once across duplicate and repeated batch removals', async () => {
+    const initial = await (await bookmarkRequest()).json();
+    const postIds = ['demo-3', 'demo-3', 'demo-2', 'demo-404'];
+    const removed = await (await bookmarkRequest('/remove-many', 'POST', { postIds, expectedVersion: initial.version })).json();
+    expect(removed).toEqual({
+      bookmarks: [], collectionFolders: initial.collectionFolders, bookmarkFolders: {}, version: initial.version + 1,
+      results: [
+        { postId: 'demo-3', status: 'removed' },
+        { postId: 'demo-2', status: 'unchanged' },
+        { postId: 'demo-404', status: 'not_found' },
+      ],
+      postStates: [
+        { postId: 'demo-3', isSaved: false, saves: 14 },
+        { postId: 'demo-2', isSaved: false, saves: 3 },
+      ],
+      reconciling: false,
+      summary: { requested: 3, changed: 1, unchanged: 1, failed: 0 },
+    });
+    const retry = await (await bookmarkRequest('/remove-many', 'POST', { postIds, expectedVersion: removed.version })).json();
+    expect(retry).toMatchObject({
+      version: removed.version + 1,
+      bookmarks: [], bookmarkFolders: {}, postStates: removed.postStates,
+      summary: { requested: 3, changed: 0, unchanged: 2, failed: 0 },
+    });
+    expect(await (await window.fetch('/api/posts/saved')).json()).toEqual([]);
+    expect(await (await window.fetch('/api/posts/demo-3')).json()).toMatchObject({ isSaved: false, saves: 14 });
+    expect(network).not.toHaveBeenCalled();
+  });
+
+  it('omits a deleted post from the bookmark snapshot and reports it missing in a batch', async () => {
+    const saved = await (await bookmarkRequest('/demo-4', 'POST', { folderId: 'later' })).json();
+    await window.fetch('/api/posts/demo-4', { method: 'DELETE' });
+    const state = await (await bookmarkRequest()).json();
+    expect(state).toMatchObject({ version: saved.version, bookmarks: ['demo-3'], bookmarkFolders: { later: ['demo-3'] } });
+    const moved = await (await bookmarkRequest('/move-many', 'POST', {
+      postIds: ['demo-4'], targetFolderId: 'all', expectedVersion: saved.version,
+    })).json();
+    expect(moved).toMatchObject({ ...state, results: [{ postId: 'demo-4', status: 'not_found' }] });
+    expect(network).not.toHaveBeenCalled();
+  });
+
+  it('rejects invalid and stale batches before applying changes', async () => {
+    const initial = await (await bookmarkRequest()).json();
+    const created = await (await bookmarkRequest('/folders', 'POST', { name: '待整理' })).json();
+    const targetFolderId = created.collectionFolders.at(-1).id;
+    expect(created.version).toBe(initial.version + 1);
+
+    const stale = await bookmarkRequest('/move-many', 'POST', { postIds: ['demo-3'], targetFolderId, expectedVersion: initial.version });
+    expect(stale.status).toBe(409);
+    expect(await stale.json()).toMatchObject({ errorCode: 'BOOKMARK_VERSION_CONFLICT' });
+    const tooLarge = await bookmarkRequest('/remove-many', 'POST', {
+      postIds: Array(101).fill('demo-3'), expectedVersion: created.version,
+    });
+    expect(tooLarge.status).toBe(400);
+    expect(await tooLarge.json()).toMatchObject({ errorCode: 'BOOKMARK_BATCH_INVALID' });
+    const noVersion = await bookmarkRequest('/remove-many', 'POST', { postIds: ['demo-3'] });
+    expect(noVersion.status).toBe(400);
+    const missingFolder = await bookmarkRequest('/move-many', 'POST', {
+      postIds: ['demo-3'], targetFolderId: 'folder-missing', expectedVersion: created.version,
+    });
+    expect(missingFolder.status).toBe(404);
+    expect(await missingFolder.json()).toMatchObject({ errorCode: 'BOOKMARK_FOLDER_NOT_FOUND' });
+    expect(await (await bookmarkRequest()).json()).toEqual(created);
+    expect(network).not.toHaveBeenCalled();
+  });
+
+  it('versions individual bookmark writes while keeping legacy data out of the preview', async () => {
+    const initial = await (await bookmarkRequest()).json();
+    const migrated = await (await bookmarkRequest('/migrate', 'POST', {
+      bookmarks: ['demo-1'], collectionFolders: [{ id: 'legacy-folder', name: '旧收藏' }],
+    })).json();
+    expect(migrated).toEqual({ ...initial, version: initial.version + 1 });
+    const renamed = await (await bookmarkRequest('/folders/later', 'PUT', { name: '校园随笔' })).json();
+    expect(renamed.version).toBe(migrated.version + 1);
+    const deleted = await (await bookmarkRequest('/folders/later', 'DELETE')).json();
+    expect(deleted).toMatchObject({ version: renamed.version + 1, bookmarks: ['demo-3'], bookmarkFolders: {} });
+    const removed = await (await bookmarkRequest('/demo-3', 'DELETE')).json();
+    expect(removed).toMatchObject({ version: deleted.version + 1, bookmarks: [], saved: false, saves: 14 });
+    expect(network).not.toHaveBeenCalled();
+  });
 });
 
 // Each preview reset is already covered above; the shapes must also match the real API.

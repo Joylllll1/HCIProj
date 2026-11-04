@@ -26,6 +26,8 @@ export function installPreviewApi() {
   let bookmarks = ['demo-3'];
   let folders = [{ id: 'all', name: '全部', isDefault: true }, { id: 'later', name: '校园生活' }];
   const bookmarkFolders = { later: ['demo-3'] };
+  let bookmarkVersion = 0;
+  let nextFolderId = 1;
   let drafts = [
     { id: 'sample-draft-1', title: '想记录一下这周的小事', content: '晚饭后去操场散步，想把这段轻松的时间记下来。', tags: ['随手记录'], images: [], updatedAt: ago(25) },
     { id: 'sample-draft-2', title: '周末一起去看展吗？', content: '正在整理时间和路线，等确认好再发出来。', tags: ['校园生活'], images: [], updatedAt: ago(150) },
@@ -46,9 +48,76 @@ export function installPreviewApi() {
     'demo-2': [{ id: 'comment-3', ownerUserId: 'student-7', content: '我也在准备期中！一起加油。', createdAt: ago(10), likes: 2, replies: [] }],
   };
   const notifications = [{ _id: 'notification-1', type: 'reply', title: '有一条新的回应', content: '来看看校园里的新声音吧。', relatedType: 'post', relatedId: 'demo-1', read: false, createdAt: ago(2) }];
-  const bookmarkState = () => ({ bookmarks, collectionFolders: folders, bookmarkFolders });
+  const bookmarkState = () => ({ bookmarks, collectionFolders: folders, bookmarkFolders, version: bookmarkVersion });
+  const commitBookmarkState = () => {
+    bookmarkVersion += 1;
+    return bookmarkState();
+  };
   const json = (data, status = 200) => Promise.resolve(new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } }));
   const notSupported = () => json({ error: '此操作请在连接后端的正式入口体验。' }, 501);
+  const folderNotFound = () => json({ error: '文件夹不存在', errorCode: 'BOOKMARK_FOLDER_NOT_FOUND' }, 404);
+  const folderNameRequired = () => json({ error: '文件夹名称不能为空', errorCode: 'BOOKMARK_FOLDER_NAME_REQUIRED' }, 400);
+
+  function assignBookmarkToFolder(postId, targetFolderId) {
+    for (const [folderId, postIds] of Object.entries(bookmarkFolders)) {
+      const remaining = postIds.filter((id) => id !== postId);
+      if (remaining.length) bookmarkFolders[folderId] = remaining;
+      else delete bookmarkFolders[folderId];
+    }
+    if (targetFolderId !== 'all') {
+      bookmarkFolders[targetFolderId] = [...(bookmarkFolders[targetFolderId] || []), postId];
+    }
+  }
+
+  function setPostSaved(post, saved, folderId = 'all') {
+    const changed = bookmarks.includes(post.id) !== saved;
+    if (changed) {
+      if (saved) bookmarks.push(post.id);
+      else bookmarks = bookmarks.filter((id) => id !== post.id);
+      post.isSaved = saved;
+      post.saves = Math.max(0, post.saves + (saved ? 1 : -1));
+    }
+    assignBookmarkToFolder(post.id, saved ? folderId : 'all');
+    return changed;
+  }
+
+  function bookmarkBatch(body, moving) {
+    const allowed = moving ? ['postIds', 'targetFolderId', 'expectedVersion'] : ['postIds', 'expectedVersion'];
+    if (!body || Object.keys(body).some((key) => !allowed.includes(key))
+      || !Array.isArray(body.postIds) || body.postIds.length < 1 || body.postIds.length > 100
+      || body.postIds.some((id) => typeof id !== 'string' || !id.trim())
+      || !Number.isSafeInteger(body.expectedVersion) || body.expectedVersion < 0
+      || (moving && (typeof body.targetFolderId !== 'string' || !body.targetFolderId.trim()))) {
+      return json({ error: '请选择 1–100 篇收藏并提供有效版本和目标', errorCode: 'BOOKMARK_BATCH_INVALID' }, 400);
+    }
+    if (body.expectedVersion !== bookmarkVersion) {
+      return json({ error: '收藏已更新，请刷新后重试', errorCode: 'BOOKMARK_VERSION_CONFLICT' }, 409);
+    }
+    const { targetFolderId } = body;
+    if (moving && !folders.some((folder) => folder.id === targetFolderId)) return folderNotFound();
+
+    const postStates = [];
+    const results = [...new Set(body.postIds)].map((postId) => {
+      const post = posts.find((item) => item.id === postId);
+      if (!post) return { postId, status: 'not_found' };
+      if (!moving) {
+        const changed = setPostSaved(post, false);
+        postStates.push({ postId, isSaved: false, saves: post.saves });
+        return { postId, status: changed ? 'removed' : 'unchanged' };
+      }
+      if (!bookmarks.includes(postId)) return { postId, status: 'not_saved' };
+      const fromFolderId = Object.entries(bookmarkFolders).find(([, ids]) => ids.includes(postId))?.[0] || 'all';
+      const changed = fromFolderId !== targetFolderId;
+      if (changed) assignBookmarkToFolder(postId, targetFolderId);
+      return { postId, status: changed ? 'moved' : 'unchanged', fromFolderId, toFolderId: targetFolderId };
+    });
+    const changed = results.filter((item) => item.status === 'moved' || item.status === 'removed').length;
+    const state = moving && changed === 0 ? bookmarkState() : commitBookmarkState();
+    return json({
+      ...state, results, postStates, reconciling: false,
+      summary: { requested: results.length, changed, unchanged: results.filter((item) => item.status === 'unchanged').length, failed: 0 },
+    });
+  }
 
   // Preview authentication has no cookies or tokens and is confined to this document.
   useAuthStore.setState({ restoreSession: async () => useAuthStore.setState({ user: previewUser, initialized: true, isAuthenticated: true }) });
@@ -75,26 +144,49 @@ export function installPreviewApi() {
       fortune = { checkedIn: true, level: '小吉', streak: 1, date: new Date().toLocaleDateString('zh-CN'), dos: [{ activity: '出去走走', description: '把一小段时间留给校园。' }], donts: [{ activity: '熬夜', description: '今天早点休息。' }] };
       return json(fortune);
     }
-    if (path === '/api/bookmarks' || path === '/api/bookmarks/migrate') return json(bookmarkState());
-    if (path === '/api/bookmarks/folders' && method === 'POST') { folders.push({ id: `folder-${Date.now()}`, name: body.name }); return json(bookmarkState()); }
-    if (path.startsWith('/api/bookmarks/folders/')) {
-      const id = path.split('/').pop();
-      if (method === 'DELETE') folders = folders.filter((f) => f.id !== id);
-      if (method === 'PUT') folders = folders.map((f) => f.id === id ? { ...f, name: body.name } : f);
-      return json(bookmarkState());
+    if (path === '/api/bookmarks' && method === 'GET') return json(bookmarkState());
+    if (path === '/api/bookmarks/migrate' && method === 'POST') {
+      // Keep legacy data from the real app out of the demo session.
+      return json(commitBookmarkState());
     }
-    if (path.startsWith('/api/bookmarks/')) {
-      const id = path.split('/').pop();
-      const post = posts.find((p) => p.id === id);
+    if (path === '/api/bookmarks/move-many' && method === 'POST') return bookmarkBatch(body, true);
+    if (path === '/api/bookmarks/remove-many' && method === 'POST') return bookmarkBatch(body, false);
+    const folderName = typeof body?.name === 'string' ? body.name.trim() : '';
+    if (path === '/api/bookmarks/folders' && method === 'POST') {
+      if (!folderName) return folderNameRequired();
+      folders.push({ id: `folder-${nextFolderId++}`, name: folderName, isDefault: false });
+      return json(commitBookmarkState(), 201);
+    }
+    const folderMatch = path.match(/^\/api\/bookmarks\/folders\/([^/]+)$/);
+    if (folderMatch && (method === 'DELETE' || method === 'PUT')) {
+      const [, folderId] = folderMatch;
+      const deleting = method === 'DELETE';
+      if (folderId === 'all') {
+        return deleting
+          ? json({ error: '默认文件夹不支持删除', errorCode: 'BOOKMARK_FOLDER_DELETE_FORBIDDEN' }, 400)
+          : json({ error: '默认文件夹不支持重命名', errorCode: 'BOOKMARK_FOLDER_RENAME_FORBIDDEN' }, 400);
+      }
+      if (!deleting && !folderName) return folderNameRequired();
+      const folder = folders.find((item) => item.id === folderId);
+      if (!folder) return folderNotFound();
+      if (deleting) {
+        folders = folders.filter((item) => item.id !== folderId);
+        delete bookmarkFolders[folderId];
+      } else {
+        folder.name = folderName;
+      }
+      return json(commitBookmarkState());
+    }
+    const bookmarkMatch = path.match(/^\/api\/bookmarks\/([^/]+)$/);
+    if (bookmarkMatch && (method === 'POST' || method === 'DELETE')) {
+      const [, postId] = bookmarkMatch;
+      const saved = method === 'POST';
+      const folderId = body?.folderId ?? 'all';
+      if (saved && !folders.some((folder) => folder.id === folderId)) return folderNotFound();
+      const post = posts.find((p) => p.id === postId);
       if (!post) return json({ error: '树洞不存在' }, 404);
-      const wasSaved = bookmarks.includes(id);
-      const saved = method !== 'DELETE';
-      bookmarks = saved ? [...new Set([...bookmarks, id])] : bookmarks.filter((item) => item !== id);
-      for (const folderId of Object.keys(bookmarkFolders)) bookmarkFolders[folderId] = bookmarkFolders[folderId].filter((item) => item !== id);
-      if (saved && body.folderId && body.folderId !== 'all') bookmarkFolders[body.folderId] = [...(bookmarkFolders[body.folderId] || []), id];
-      post.isSaved = saved;
-      post.saves += Number(saved) - Number(wasSaved);
-      return json({ ...bookmarkState(), postId: id, saved, saves: post.saves });
+      setPostSaved(post, saved, folderId);
+      return json({ ...commitBookmarkState(), postId, saved, saves: post.saves });
     }
     if (path === '/api/posts/saved') return json(posts.filter((p) => bookmarks.includes(p.id)));
     if (path === '/api/posts/mine') return json(posts.filter((p) => p.ownerUserId === demoUser._id));
@@ -117,7 +209,10 @@ export function installPreviewApi() {
       const post = posts.find((p) => p.id === postMatch[1]);
       if (!post) return json({ error: '树洞不存在' }, 404);
       if (postMatch[2]) { post.isLiked = !post.isLiked; post.likes += post.isLiked ? 1 : -1; return json({ liked: post.isLiked, likes: post.likes }); }
-      if (method === 'DELETE') posts = posts.filter((p) => p.id !== post.id);
+      if (method === 'DELETE') {
+        setPostSaved(post, false);
+        posts = posts.filter((p) => p.id !== post.id);
+      }
       return json(post);
     }
     if (path === '/api/comments' && method === 'POST') {

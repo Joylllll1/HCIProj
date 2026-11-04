@@ -42,6 +42,7 @@ const userSchema = new mongoose.Schema(
       }],
       default: [{ id: 'all', name: '全部', isDefault: true }],
     },
+    bookmarkVersion: { type: Number, default: 0 },
     bookmarkFolderMap: {
       type: Map,
       of: [String],

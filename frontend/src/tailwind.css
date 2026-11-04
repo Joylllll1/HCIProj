@@ -2085,3 +2085,34 @@ h1, h2, h3, p {
     @apply w-[140px];
   }
 }
+
+/* Saved posts use rows so both columns and card footers stay aligned. */
+.bookmark-grid {
+  @apply grid grid-cols-2 items-stretch gap-[18px] max-sm:grid-cols-1 max-sm:gap-3;
+}
+
+.bookmark-grid-item {
+  @apply min-w-0;
+}
+
+.bookmark-grid-item > .post-card {
+  @apply flex h-full flex-col overflow-hidden;
+}
+
+.bookmark-grid-item > .post-card > .post-footer {
+  @apply mt-auto;
+}
+
+.bookmark-selection-card {
+  @apply h-full;
+}
+
+.bookmark-action-dialog {
+  @apply text-text;
+}
+
+.bookmark-folder-option input,
+.bookmark-selection-card input,
+.bookmark-selection-toolbar input {
+  accent-color: var(--color-blue);
+}

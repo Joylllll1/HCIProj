@@ -149,7 +149,7 @@ function PostCard({
             <button type="button" id={`discuss-${post.id}`} aria-label={expanded ? '收起评论' : '查看评论'} aria-expanded={onDiscuss ? Boolean(expanded) : undefined} aria-controls={onDiscuss ? `discussion-${post.id}` : undefined} className="metric-btn" onClick={onDiscuss || onOpen}>
               <Icon name="chat_bubble" /> {formatCount(post.comments)}
             </button>
-            {onBookmark && <button type="button" aria-label={bookmarked ? '取消收藏' : '收藏'} aria-pressed={Boolean(bookmarked)} className="metric-btn" onClick={onBookmark}>
+            {onBookmark && <button type="button" aria-label={bookmarked ? '取消收藏' : '收藏'} aria-pressed={Boolean(bookmarked)} className="metric-btn" onClick={(event) => { event.stopPropagation(); onBookmark(); }}>
               <Icon name={bookmarked ? 'bookmark' : 'bookmark_border'} /> {formatCount(post.saves)}
             </button>}
           </div>

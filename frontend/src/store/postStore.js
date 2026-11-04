@@ -21,6 +21,23 @@ function normalizeFeedQuery(query) {
   return typeof query === 'string' ? query.trim() : '';
 }
 
+function reconcileLoadedBookmarks(posts, bookmarkSnapshot, saveVersions, state) {
+  const current = useBookmarkStore.getState();
+  const membershipChanged = current.initialized
+    && current.bookmarks !== bookmarkSnapshot.bookmarks;
+  const saved = new Set(current.bookmarks);
+  return posts.map((post) => {
+    const countChanged = state.saveObservationVersions[post.id] !== saveVersions[post.id];
+    const saves = state.postStatsById[post.id]?.saves;
+    if (!membershipChanged && !countChanged) return post;
+    return {
+      ...post,
+      ...(membershipChanged ? { isSaved: saved.has(post.id) } : {}),
+      ...(countChanged && saves !== undefined ? { saves } : {}),
+    };
+  });
+}
+
 function appendUniquePosts(existingPosts = [], nextPosts = []) {
   const seenIds = new Set(existingPosts.map((post) => post.id));
   const appendedPosts = nextPosts.filter((post) => !seenIds.has(post.id));
@@ -383,6 +400,7 @@ const usePostStore = create((set, get) => ({
   loadingMore: false,
   myPosts: [],
   postStatsById: {},
+  saveObservationVersions: {},
   currentPage: 1,
   totalPages: 1,
   totalPosts: 0,
@@ -413,6 +431,7 @@ const usePostStore = create((set, get) => ({
       loadingMore: false,
       myPosts: [],
       postStatsById: {},
+      saveObservationVersions: {},
       currentPage: 1,
       totalPages: 1,
       totalPosts: 0,
@@ -434,6 +453,8 @@ const usePostStore = create((set, get) => ({
     const limit = Number.isFinite(options.limit) ? options.limit : state.pageSize;
     const requestGeneration = accountGeneration;
     const requestId = ++latestFeedRequestId;
+    const bookmarkSnapshot = useBookmarkStore.getState();
+    const saveVersions = state.saveObservationVersions;
     set(append ? { moreError: '' } : { feedError: '', loadingMore: false });
     const shouldShowLoading = !append && !options.silent;
 
@@ -454,15 +475,16 @@ const usePostStore = create((set, get) => ({
         return null;
       }
 
+      const posts = reconcileLoadedBookmarks(data.posts, bookmarkSnapshot, saveVersions, get());
       set((state) => ({
-        posts: append ? appendUniquePosts(state.posts, data.posts) : data.posts,
+        posts: append ? appendUniquePosts(state.posts, posts) : posts,
         likedPosts: append
           ? mergeLikedPostIds(
             state.likedPosts,
-            appendUniquePosts(state.posts, data.posts),
+            appendUniquePosts(state.posts, posts),
           )
-          : data.posts.filter((post) => post.isLiked).map((post) => post.id),
-        postStatsById: mergePostStatsMap(state.postStatsById, data.posts),
+          : posts.filter((post) => post.isLiked).map((post) => post.id),
+        postStatsById: mergePostStatsMap(state.postStatsById, posts),
         currentPage: options.currentPageOverride ?? (append ? page : 1),
         totalPages: Math.max(1, Math.ceil((data.total || 0) / state.pageSize)),
         totalPosts: data.total || 0,
@@ -525,12 +547,15 @@ const usePostStore = create((set, get) => ({
   fetchMyPosts: async () => {
     const requestGeneration = accountGeneration;
     const requestId = ++latestMyPostsRequestId;
+    const bookmarkSnapshot = useBookmarkStore.getState();
+    const saveVersions = get().saveObservationVersions;
     try {
       const data = await postService.fetchMyPosts();
       if (requestGeneration !== accountGeneration || requestId !== latestMyPostsRequestId) return null;
+      const posts = reconcileLoadedBookmarks(data, bookmarkSnapshot, saveVersions, get());
       set((state) => ({
-        myPosts: data,
-        postStatsById: mergePostStatsMap(state.postStatsById, data),
+        myPosts: posts,
+        postStatsById: mergePostStatsMap(state.postStatsById, posts),
       }));
       return data;
     } catch (error) {
@@ -539,10 +564,13 @@ const usePostStore = create((set, get) => ({
     }
   },
 
+  removedPostIds: {},
+
   removePostById: (postId, options = {}) => {
     const shouldClearSelectedPost = options.clearSelectedPost !== false;
     useBookmarkStore.getState().removePostReferences(postId);
     set((state) => ({
+      removedPostIds: { ...state.removedPostIds, [postId]: true },
       myPosts: state.myPosts.filter((p) => p.id !== postId),
       posts: state.posts.filter((p) => p.id !== postId),
       postStatsById: Object.fromEntries(
@@ -814,6 +842,16 @@ const usePostStore = create((set, get) => ({
     }
   },
 
+  syncBookmarkMembership: (bookmarks) => {
+    const saved = new Set(bookmarks);
+    const update = (post) => ({ ...post, isSaved: saved.has(post.id) });
+    set((state) => ({
+      posts: state.posts.map(update),
+      myPosts: state.myPosts.map(update),
+      selectedPost: state.selectedPost ? update(state.selectedPost) : null,
+    }));
+  },
+
   syncSaveState: (postId, result) => {
     set((state) => applyPostSaveState(state, postId, {
       saved: !!result?.saved,
@@ -822,7 +860,17 @@ const usePostStore = create((set, get) => ({
   },
 
   applyRealtimePostStats: (postId, stats) => {
-    set((state) => applyPostStatsUpdate(state, postId, stats));
+    set((state) => ({
+      ...applyPostStatsUpdate(state, postId, stats),
+      // Even an identical SSE count is a new server observation. Local copies
+      // made when opening a post do not advance this revision.
+      ...(normalizeCount(stats.saves) !== undefined ? {
+        saveObservationVersions: {
+          ...state.saveObservationVersions,
+          [postId]: (state.saveObservationVersions[postId] || 0) + 1,
+        },
+      } : {}),
+    }));
   },
 
   updateSaves: (postId, increment) => {

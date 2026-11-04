@@ -43,3 +43,15 @@ export async function removeBookmark(postId) {
     method: 'DELETE',
   });
 }
+
+export async function moveBookmarks(postIds, targetFolderId, expectedVersion) {
+  return request('/api/bookmarks/move-many', {
+    method: 'POST', body: JSON.stringify({ postIds, targetFolderId, expectedVersion }),
+  });
+}
+
+export async function removeBookmarks(postIds, expectedVersion) {
+  return request('/api/bookmarks/remove-many', {
+    method: 'POST', body: JSON.stringify({ postIds, expectedVersion }),
+  });
+}

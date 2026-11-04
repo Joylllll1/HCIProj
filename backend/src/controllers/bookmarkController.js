@@ -42,3 +42,11 @@ export async function removeBookmark(req, res) {
   const data = await bookmarkService.removeBookmark(req.user._id.toString(), req.params.postId);
   res.json(data);
 }
+
+export async function moveMany(req, res) {
+  res.json(await bookmarkService.moveBookmarks(req.user._id.toString(), req.body));
+}
+
+export async function removeMany(req, res) {
+  res.json(await bookmarkService.removeBookmarks(req.user._id.toString(), req.body));
+}
